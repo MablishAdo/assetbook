@@ -2,9 +2,9 @@
 """AssetBook「每月只花 1000」一键配置。
 
 跑完会建好：
-  1. 账户「邮政储蓄」——当生活费钱包用
+  1. 账户：邮政储蓄（生活费钱包）、工资卡、微信零钱、支付宝
   2. 每月通用预算合计 1000（餐饮 520 / 交通 100 / 居住 120 / 通讯 40 / 购物 120 / 医疗 60 / 其他 40）
-  3. 一条映射规则：账单里支付方式含「邮政」的，自动归到邮储账户
+  3. 映射规则：账单里支付方式含「邮政 / 零钱 / 支付宝 / 余额宝」的，自动归到对应账户
 
 可以重复跑，不会重复建。
 
@@ -14,6 +14,8 @@
     python3 setup-1000.py 你的密码 http://ip:8000   # 指定地址（比如部署在别的机器上）
 
 密码的查找顺序：命令行参数 → 环境变量 ASSETBOOK_PASSWORD → 同目录 .env 里的 ASSETBOOK_PASSWORD → 交互输入。
+
+想改账户或预算，直接改下面三个列表再跑一次（预算会覆盖，账户/分类不会重复建）。
 """
 
 from __future__ import annotations
@@ -24,11 +26,19 @@ import json
 import os
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# 合计 1000 —— 想改就直接改这里的数字，改完重跑一次即可
+# 账户：(名字, 类型, 排序)  类型取值见 界面「新增账户」：bank 银行卡 / payment 支付账户 / cash 现金 / broker 券商 / credit 信用卡 / loan 贷款
+# 排在最前面的会成为「记一笔」里默认选中的账户
+ACCOUNTS: list[tuple[str, str, int]] = [
+    ("邮政储蓄", "bank", 0),      # 生活费钱包：每月转 1000 进来，日常优先刷这张
+    ("工资卡", "bank", 1),        # 工资进这里，再转到邮储
+    ("微信零钱", "payment", 2),   # 微信里没走卡的那部分
+    ("支付宝", "payment", 3),
+]
+
+# 每月通用预算，合计 1000 —— 想改就改数字
 BUDGET: list[tuple[str, float]] = [
     ("餐饮", 520),   # 吃饭，自己做为主
     ("交通", 100),   # 通勤
@@ -38,9 +48,25 @@ BUDGET: list[tuple[str, float]] = [
     ("医疗", 60),    # 常备药
     ("其他", 40),    # 机动，别花掉，留给意外
 ]
-ACCOUNT = "邮政储蓄"
-ACCOUNT_KIND = "bank"
-PAYEE_PATTERN = "邮政"       # 支付宝/微信账单里的「邮政储蓄卡」认到邮储账户
+
+# 账单里的「收/付款方式」→ 账户：包含左边这个词就落到右边账户
+PAYEE_RULES: list[tuple[str, str]] = [
+    ("邮政", "邮政储蓄"),
+    ("零钱", "微信零钱"),
+    ("余额宝", "支付宝"),
+    ("支付宝", "支付宝"),
+]
+
+# 记账备注关键词 → 分类：备注里包含左边这个词就自动归到右边分类（已有的不会重复建）
+RULES: list[tuple[str, str]] = [
+    ("买菜", "餐饮"), ("菜市场", "餐饮"), ("食堂", "餐饮"), ("早餐", "餐饮"),
+    ("午饭", "餐饮"), ("晚饭", "餐饮"), ("水果", "餐饮"), ("面条", "餐饮"),
+    ("水费", "居住"), ("电费", "居住"), ("燃气", "居住"), ("水电气", "居住"),
+    ("话费", "通讯"), ("流量", "通讯"), ("手机费", "通讯"),
+    ("地铁", "交通"), ("公交", "交通"), ("单车", "交通"), ("加油", "交通"),
+    ("日用品", "购物"), ("纸巾", "购物"), ("洗发", "购物"), ("牙膏", "购物"),
+    ("药店", "医疗"), ("挂号", "医疗"), ("体检", "医疗"),
+]
 
 
 class Api:
@@ -120,34 +146,47 @@ def main() -> None:
 
     # 2. 账户
     code, res = api.get("/api/accounts?include_archived=false")
-    accounts = res.get("items", []) if isinstance(res, dict) else []
-    account = next((a for a in accounts if a["name"] == ACCOUNT), None)
-    if account:
-        account_id = account["id"]
-        print(f"· 账户「{ACCOUNT}」已存在")
-    else:
+    existing = {a["name"]: a["id"] for a in (res.get("items", []) if isinstance(res, dict) else [])}
+    account_id: dict[str, int] = {}
+    for name, kind, sort in ACCOUNTS:
+        if name in existing:
+            account_id[name] = existing[name]
+            print(f"· 账户「{name}」已存在")
+            continue
         code, res = api.post("/api/accounts", {
-            "name": ACCOUNT, "kind": ACCOUNT_KIND, "currency": "CNY",
-            "base_balance": 0, "sort": 0,
+            "name": name, "kind": kind, "currency": "CNY",
+            "base_balance": 0, "sort": sort,
         })
         if code not in (200, 201):
-            print(f"× 建账户失败：{res}")
-            sys.exit(1)
-        account_id = res["id"]
-        print(f"· 已建账户「{ACCOUNT}」")
+            print(f"× 建账户「{name}」失败：{res}")
+            continue
+        account_id[name] = res["id"]
+        print(f"· 已建账户「{name}」")
 
     # 3. 分类（复用内置的，缺哪个补哪个）
     code, res = api.get("/api/categories")
     cats = {c["name"]: c["id"] for c in (res.get("items", []) if isinstance(res, dict) else [])}
-    color = "#1c6b52"
     for name, _amount in BUDGET:
         if name not in cats:
-            code, res = api.post("/api/categories", {"name": name, "kind": "expense", "color": color})
+            code, res = api.post("/api/categories", {"name": name, "kind": "expense", "color": "#1c6b52"})
             if code in (200, 201):
                 cats[name] = res["id"]
                 print(f"· 已建分类「{name}」")
 
-    # 4. 预算（month='*' = 每月通用，重复跑会覆盖同样的值）
+    # 4. 分类规则（备注里含关键词就自动归类）
+    code, res = api.get("/api/rules")
+    keywords = {r["keyword"] for r in (res.get("items", []) if isinstance(res, dict) else [])}
+    added = 0
+    for keyword, cat_name in RULES:
+        cid = cats.get(cat_name)
+        if not cid or keyword in keywords:
+            continue
+        api.post("/api/rules", {"keyword": keyword, "category_id": cid, "priority": 100})
+        added += 1
+    if added:
+        print(f"· 补了 {added} 条分类规则（买菜、水电气、话费…）")
+
+    # 5. 预算（month='*' = 每月通用，重复跑会覆盖成同样的值）
     total = 0.0
     for name, amount in BUDGET:
         cid = cats.get(name)
@@ -161,16 +200,22 @@ def main() -> None:
         total += amount
         print(f"· 预算 {name:<4} {amount:>6.0f}")
 
-    # 5. 映射规则：账单里「邮政储蓄卡」→ 邮储账户
+    # 6. 映射规则：账单里的支付方式自动落到对应账户
     code, res = api.get("/api/payee-rules")
     rules = res.get("items", []) if isinstance(res, dict) else []
-    if not any(r["pattern"] == PAYEE_PATTERN and r["account_id"] == account_id for r in rules):
-        api.post("/api/payee-rules", {"pattern": PAYEE_PATTERN, "account_id": account_id, "priority": 10})
-        print(f"· 映射规则：「{PAYEE_PATTERN}」→ {ACCOUNT}")
+    for pattern, acct_name in PAYEE_RULES:
+        target = account_id.get(acct_name)
+        if not target:
+            continue
+        if any(r["pattern"] == pattern and r["account_id"] == target for r in rules):
+            continue
+        api.post("/api/payee-rules", {"pattern": pattern, "account_id": target, "priority": 10})
+        print(f"· 映射规则：「{pattern}」→ {acct_name}")
 
-    print(f"\n√ 好了。每月预算合计 {total:.0f}")
-    print("  接下来：每月转 1000 进邮储，花钱尽量走这张卡；")
-    print("  月末在界面「设置 → 账户 → 校准」把余额写成实际值，剩多少一目了然。")
+    print(f"\n√ 好了。账户 {len(account_id)} 个，每月预算合计 {total:.0f}")
+    print("  每月：从工资卡转 1000 到邮政储蓄（记账时类型选「转账」）；")
+    print("  花钱尽量走邮储，其他账户花的也照记，预算按分类统一算总数；")
+    print("  月末用「设置 → 账户 → 校准」把邮储余额写成实际值，剩多少一目了然。")
 
 
 if __name__ == "__main__":
