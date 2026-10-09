@@ -889,7 +889,7 @@ async function renderSettings() {
       <td data-label="当前余额" class="num ${a.is_liability ? 'neg' : ''}">${fmt(a.balance)}</td>
       <td data-label="基准" class="num muted">${fmt0(a.base_balance)}<br><span style="font-size:11px">${a.base_date || ''}</span></td>
       <td data-label=""><div class="row-actions">
-        <button class="btn tiny" data-校准="${a.id}" data-name="${esc(a.name)}" data-balance="${a.balance}">校准</button>
+        <button class="btn tiny" data-校准="${a.id}" data-name="${esc(a.name)}" data-balance="${a.balance}" data-liability="${a.is_liability ? 1 : 0}">校准</button>
         <button class="btn tiny danger" data-del-account="${a.id}">删除</button>
       </div></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">还没有账户，先建一个</div></td></tr>';
@@ -1150,8 +1150,12 @@ function bind() {
     const cal = e.target.dataset['校准'];
     if (cal) {
       const name = e.target.dataset.name;
-      const cur = e.target.dataset.balance;
-      const input = prompt(`把「${name}」的余额校准成多少？（当前 ${cur}）`, cur);
+      const isLiability = e.target.dataset.liability === '1';
+      const cur = parseFloat(e.target.dataset.balance) || 0;
+      const ask = isLiability
+        ? `「${name}」现在还欠多少？（当前欠 ${fmt0(Math.abs(cur))}）`
+        : `把「${name}」的余额校准成多少？（当前 ${fmt0(cur)}）`;
+      const input = prompt(ask, String(isLiability ? Math.abs(cur) : cur));
       if (input === null) return;
       await api(`/api/accounts/${cal}/snapshot`, { method: 'POST', body: { balance: parseFloat(input) || 0 } });
       toast('已校准');

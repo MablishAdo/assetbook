@@ -30,11 +30,13 @@ def list_accounts(include_archived: bool = False):
 
 @router.post("/accounts", status_code=201)
 def create_account(payload: AccountIn):
+    # 负债账户的「余额」存成负数（欠款），填正数也按欠款处理
+    base = -abs(payload.base_balance) if payload.kind in svc.LIABILITY_KINDS else payload.base_balance
     try:
         cur = db.execute(
             "INSERT INTO accounts (name, kind, currency, base_balance, base_date, sort, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (payload.name, payload.kind, payload.currency, payload.base_balance,
+            (payload.name, payload.kind, payload.currency, base,
              payload.base_date or svc.today(), payload.sort, svc.today()),
         )
     except Exception as exc:  # UNIQUE 冲突
@@ -63,13 +65,22 @@ def delete_account(account_id: int):
 
 @router.post("/accounts/{account_id}/snapshot")
 def calibrate(account_id: int, payload: SnapshotIn):
-    """校准基准：把当前实际余额写回基准，之后的流水继续累加。"""
+    """校准基准：把当前实际余额写回基准，之后的流水继续累加。
+
+    负债账户（信用卡/贷款）填正数表示「欠多少」，这里自动存成负数，
+    免得填个正数反被当成资产。
+    """
+    row = db.q1("SELECT kind FROM accounts WHERE id = ?", (account_id,))
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "没这个账户")
+    liability = row["kind"] in svc.LIABILITY_KINDS
+    balance = -abs(payload.balance) if liability else payload.balance
     db.execute(
         "UPDATE accounts SET base_balance = ?, base_date = ? WHERE id = ?",
-        (payload.balance, payload.date or svc.today(), account_id),
+        (balance, payload.date or svc.today(), account_id),
     )
     db.snapshot_networth()
-    return {"ok": True}
+    return {"ok": True, "balance": balance}
 
 
 # ---------- 分类 ----------
