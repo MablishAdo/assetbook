@@ -35,10 +35,15 @@ from pathlib import Path
 ACCOUNTS: list[tuple[str, str, int]] = [
     ("邮政储蓄", "bank", 0),      # 生活费钱包：每月转 1000 进来，日常优先刷这张
     ("工商银行", "bank", 1),      # 工资卡：工资进这里
-    ("中国银行", "bank", 2),      # 还房贷的卡
-    ("房贷", "loan", 3),          # 负债账户：把剩余欠款填进去，净资产才算得准
+    ("中国银行", "bank", 2),      # 还房贷的卡（钱从这里扣）
     ("微信零钱", "payment", 4),
     ("支付宝", "payment", 5),
+    ("房贷欠款", "loan", 9),      # 负债账户：只记「还欠多少」，偶尔更新一次即可
+]
+
+# 需要用到、但【不设预算】的分类（一设预算就会占那 1000，所以单独列）
+EXTRA_CATEGORIES: list[str] = [
+    "房贷",   # 月供：固定大支出，按「支出」记，不算在生活费 1000 里
 ]
 
 # 每月通用预算，合计 1000 —— 想改就改数字
@@ -73,6 +78,7 @@ RULES: list[tuple[str, str]] = [
     ("地铁", "交通"), ("公交", "交通"), ("单车", "交通"), ("加油", "交通"),
     ("日用品", "购物"), ("纸巾", "购物"), ("洗发", "购物"), ("牙膏", "购物"),
     ("药店", "医疗"), ("挂号", "医疗"), ("体检", "医疗"),
+    ("房贷", "房贷"), ("月供", "房贷"),
 ]
 
 
@@ -173,7 +179,7 @@ def main() -> None:
     # 3. 分类（复用内置的，缺哪个补哪个）
     code, res = api.get("/api/categories")
     cats = {c["name"]: c["id"] for c in (res.get("items", []) if isinstance(res, dict) else [])}
-    for name, _amount in BUDGET:
+    for name in [n for n, _ in BUDGET] + EXTRA_CATEGORIES:
         if name not in cats:
             code, res = api.post("/api/categories", {"name": name, "kind": "expense", "color": "#1c6b52"})
             if code in (200, 201):
@@ -220,11 +226,13 @@ def main() -> None:
         print(f"· 映射规则：「{pattern}」→ {acct_name}")
 
     print(f"\n√ 好了。账户 {len(account_id)} 个，每月预算合计 {total:.0f}")
-    print("  每月两个动作都记「转账」——不算消费、不占这 1000：")
-    print("    工商银行 → 邮政储蓄   1000（这就是你全部的生活费）")
-    print("    工商银行 → 中国银行   月供；再 中国银行 → 房贷 冲欠款")
+    print(f"  「房贷」是分类（记月供支出），「房贷欠款」是账户（记还欠多少），两个别混。")
+    print("  每月三条记录：")
+    print("    工商银行 → 中国银行   转账：把月供放进还款卡")
+    print("    中国银行  支出 月供，分类选「房贷」（不占那 1000）")
+    print("    工商银行 → 邮政储蓄   转账 1000（这就是你全部的生活费）")
     print("  花钱从哪个账户走都照记，预算按分类合计，超没超 1000 一眼看得出。")
-    print("  房贷账户：在「设置 → 账户 → 校准」填剩余欠款（填正数就行，会自动记成负债）。")
+    print("  「房贷欠款」不用每月改，隔几个月校准一次填剩余欠款就行（填正数）。")
 
 
 if __name__ == "__main__":
