@@ -183,8 +183,9 @@ def auto_settings(payload: AutoSyncIn):
 
 @router.post("/auto/run/{what}")
 async def auto_run(what: str):
-    if what not in ("quotes", "rates", "networth"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只支持 quotes / rates / networth")
+    if what not in ("quotes", "rates", "networth", "inbox", "mail"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "只支持 quotes / rates / networth / inbox / mail")
     return await sched.scheduler.run_now(what)
 
 

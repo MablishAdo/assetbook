@@ -65,7 +65,11 @@ function openModal(title, html, onMount) {
   $('#modal').hidden = false;
   if (onMount) onMount($('#modal-body'));
 }
-function closeModal() { $('#modal').hidden = true; $('#modal-body').innerHTML = ''; }
+function closeModal() {
+  $('#modal').hidden = true;
+  $('#modal-body').innerHTML = '';
+  $('#modal-card').classList.remove('is-wide');
+}
 
 /* ---------------- 登录 / 初始化 ---------------- */
 
@@ -293,66 +297,310 @@ async function reloadRulesIfNeeded() { /* 规则不常变，占位便于扩展 *
 
 /* ---------------- 导入 ---------------- */
 
-function openImport() {
-  openModal('导入账单 CSV', `
-    <p class="hint" style="margin-top:0">支持支付宝 / 微信 / 通用 CSV。先把文件传上来预览，确认没问题再写入。</p>
-    <label class="field"><span>账单文件</span><input class="input" type="file" id="imp-file" accept=".csv,text/csv"></label>
-    <label class="field"><span>导入到哪个账户</span><select class="input" id="imp-account">
-      ${state.accounts.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}
-    </select></label>
+// 导入弹窗的临时状态：当前文件、预览结果、来源信息
+const impState = { file: null, preview: null, sources: null };
+
+async function openImport() {
+  impState.file = null;
+  impState.preview = null;
+  openModal('导入账单', `
+    <p class="hint" style="margin-top:0">
+      支持支付宝 / 微信支付 / 银行流水 / 通用 CSV，微信导出的加密 zip 也能直接传。
+      同一个单号重复导入会自动跳过，不会把账目翻倍。
+    </p>
+    <div id="imp-channels" class="imp-channels"></div>
+    <label class="field"><span>账单文件（.csv / .txt / 微信加密 .zip）</span>
+      <input class="input" type="file" id="imp-file" accept=".csv,.txt,.zip"></label>
+    <div class="modal-cols">
+      <label class="field"><span>压缩包密码（只有微信 zip 要填）</span>
+        <input class="input" type="text" id="imp-zip" placeholder="微信「账单下载」通知里那串"></label>
+      <label class="field"><span>没匹配到规则的账户</span>
+        <select class="input" id="imp-account">
+          ${state.accounts.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}
+        </select></label>
+    </div>
     <div id="imp-preview"></div>
     <button class="btn primary block" id="imp-go" disabled>确认导入</button>
+    <div id="imp-rules" class="imp-rules-wrap"></div>
   `, (root) => {
-    $('#imp-file', root).addEventListener('change', previewImport);
+    $('#imp-file', root).addEventListener('change', (e) => {
+      impState.file = e.target.files[0] || null;
+      if (impState.file) previewImport();
+    });
+    $('#imp-account', root).addEventListener('change', () => { if (impState.file) previewImport(); });
+    $('#imp-zip', root).addEventListener('change', () => { if (impState.file) previewImport(); });
     $('#imp-go', root).addEventListener('click', doImport);
+    $('#modal-card').classList.add('is-wide');
+    renderImportChannels();
+    renderImportRules();
   });
 }
 
-async function previewImport() {
-  const file = $('#imp-file').files[0];
-  const accountId = $('#imp-account').value;
-  if (!file) return;
-  const form = new FormData();
-  form.append('file', file);
-  form.append('account_id', accountId);
-  form.append('dry_run', 'true');
-  $('#imp-preview').innerHTML = '<p class="hint">解析中…</p>';
+async function refreshImportSources() {
   try {
-    const res = await api('/api/transactions/import', { method: 'POST', form });
-    if (!res.rows) {
-      $('#imp-preview').innerHTML = `<p class="hint neg">${esc((res.warnings || []).join('；'))}</p>`;
-      $('#imp-go').disabled = true;
-      return;
-    }
-    const rows = res.preview.slice(0, 6).map((r) => `
-      <div class="mini-row"><span class="d">${r.date.slice(5)}</span>
-        <span class="n">${esc(r.note)}${r.category_name ? ' · ' + esc(r.category_name) : ''}</span>
-        <span class="a ${r.type === 'in' ? 'pos' : 'neg'}">${r.type === 'in' ? '+' : '−'}${fmt0(r.amount)}</span></div>`).join('');
-    $('#imp-preview').innerHTML = `
-      <p class="hint">共 ${res.rows} 行：收入 ${fmt0(res.sum_in)}，支出 ${fmt0(res.sum_out)}
-        ${res.warnings && res.warnings.length ? '（' + esc(res.warnings.join('；')) + '）' : ''}</p>
-      <div class="mini-list">${rows}</div>`;
-    $('#imp-go').disabled = false;
-  } catch (err) {
-    $('#imp-preview').innerHTML = `<p class="hint neg">${esc(err.message)}</p>`;
-    $('#imp-go').disabled = true;
-  }
+    impState.sources = await api('/api/import/sources');
+  } catch (err) { impState.sources = null; }
+  return impState.sources;
 }
 
-async function doImport() {
-  const file = $('#imp-file').files[0];
+// 收件目录 / 邮箱 两条自动管道的手动触发条
+async function renderImportChannels() {
+  const host = $('#imp-channels');
+  if (!host) return;
+  const s = await refreshImportSources();
+  if (!s) { host.innerHTML = ''; return; }
+  const inbox = s.inbox || {};
+  host.innerHTML = `
+    <div class="imp-channel">
+      <div class="imp-channel-main">
+        <strong>收件目录</strong>
+        <code class="imp-path">${esc(inbox.dir || '')}</code>
+        <span class="muted">待处理 ${inbox.pending || 0} · 已导入 ${inbox.imported || 0}${inbox.failed ? ' · 失败 ' + inbox.failed : ''}</span>
+      </div>
+      <button class="btn tiny" id="imp-scan" type="button">立刻扫描</button>
+    </div>
+    <div class="imp-channel">
+      <div class="imp-channel-main">
+        <strong>邮箱收账单</strong>
+        <span class="muted">${s.mail_configured ? '已配置 IMAP，可自动收未读邮件里的账单' : '未配置（设 ASSETBOOK_IMAP_HOST / USER / PASS 后可用）'}</span>
+      </div>
+      <button class="btn tiny" id="imp-mail" type="button"${s.mail_configured ? '' : ' disabled'}>收一次邮件</button>
+    </div>`;
+
+  $('#imp-scan').addEventListener('click', async () => {
+    const btn = $('#imp-scan');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/import/inbox/scan', { method: 'POST' });
+      toast(r.seen ? `处理 ${r.seen} 个文件，新增 ${r.imported} 笔` : '收件目录里没有新文件');
+      await renderImportChannels();
+      await renderImportRules();
+      if (impState.file) previewImport();
+    } catch (err) { toast(err.message, true); } finally { const b = $('#imp-scan'); if (b) b.disabled = false; }
+  });
+  const mb = $('#imp-mail');
+  if (mb) mb.addEventListener('click', async () => {
+    mb.disabled = true;
+    try {
+      const r = await api('/api/import/mail/fetch', { method: 'POST' });
+      if (!r.ok) toast(r.error || '收邮件失败', true);
+      else toast(`读了 ${r.mails} 封邮件，导入 ${r.imported} 笔`);
+      await renderImportChannels();
+      if (impState.file) previewImport();
+    } catch (err) { toast(err.message, true); } finally { const b = $('#imp-mail'); if (b) b.disabled = false; }
+  });
+}
+
+// 支付方式映射规则 + 最近批次（可撤销）
+async function renderImportRules() {
+  const host = $('#imp-rules');
+  if (!host) return;
+  const s = impState.sources || await refreshImportSources();
+  if (!s) { host.innerHTML = ''; return; }
+  const rules = s.payee_rules || [];
+  const batches = s.batches || [];
+
+  const ruleHtml = rules.length ? rules.map((r) => `
+    <div class="imp-rule">
+      <span class="imp-rule-pat">${esc(r.pattern)}</span>
+      <span class="arrow">→</span>
+      <span class="imp-rule-acc">${esc(r.account_name || '')}</span>
+      ${r.source ? `<span class="tag">${esc(r.source)}</span>` : ''}
+      <button class="btn tiny danger" data-del-payee="${r.id}">删除</button>
+    </div>`).join('') : '<div class="empty">还没有映射规则</div>';
+
+  const batchHtml = batches.length ? batches.slice(0, 5).map((b) => `
+    <div class="imp-batch">
+      <span class="imp-batch-name">${esc(b.batch)}</span>
+      <span class="muted">${b.n} 笔 · ${esc(b.from_date || '')} ~ ${esc(b.to_date || '')}</span>
+      <button class="btn tiny danger" data-del-batch="${esc(b.batch)}">撤销</button>
+    </div>`).join('') : '';
+
+  host.innerHTML = `
+    <div class="imp-section-title">支付方式 → 账户 映射</div>
+    <div class="imp-rule-grid">${ruleHtml}</div>
+    ${batchHtml ? '<div class="imp-section-title">最近导入批次</div><div class="imp-rule-grid">' + batchHtml + '</div>' : ''}`;
+
+  host.querySelectorAll('[data-del-payee]').forEach((btn) => btn.addEventListener('click', async () => {
+    await api('/api/payee-rules/' + btn.dataset.delPayee, { method: 'DELETE' });
+    toast('规则已删除');
+    await refreshImportSources();
+    await renderImportRules();
+    if (impState.file) previewImport();
+  }));
+  host.querySelectorAll('[data-del-batch]').forEach((btn) => btn.addEventListener('click', async () => {
+    if (!confirm('撤销这次导入？对应的流水会被删掉。')) return;
+    try {
+      const r = await api('/api/import/batch/' + encodeURIComponent(btn.dataset.delBatch), { method: 'DELETE' });
+      toast(`已撤销 ${r.removed} 笔`);
+      await refreshImportSources();
+      await renderImportRules();
+      await loadOverview();
+      if (currentView() === 'transactions') loadTransactions();
+    } catch (err) { toast(err.message, true); }
+  }));
+}
+
+async function previewImport() {
+  const file = impState.file;
   if (!file) return;
   const form = new FormData();
   form.append('file', file);
   form.append('account_id', $('#imp-account').value);
-  form.append('dry_run', 'false');
+  form.append('zip_password', ($('#imp-zip') && $('#imp-zip').value) || '');
+  const box = $('#imp-preview');
+  box.innerHTML = '<p class="hint">解析中…</p>';
+  $('#imp-go').disabled = true;
   try {
-    const res = await api('/api/transactions/import', { method: 'POST', form });
-    toast(`导入 ${res.imported} 笔`);
-    closeModal();
+    const res = await api('/api/import/preview', { method: 'POST', form });
+    impState.preview = res;
+    renderImportPreview(res);
+  } catch (err) {
+    impState.preview = null;
+    box.innerHTML = `<p class="hint neg">${esc(err.message)}</p>`;
+  }
+}
+
+function impAccountOptions(selectedId) {
+  return state.accounts.map((a) =>
+    `<option value="${a.id}"${a.id === selectedId ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
+}
+
+function renderImportPreview(res) {
+  const s = res.stats || {};
+  const warn = (res.warnings || []).length
+    ? `<div class="imp-warn">${res.warnings.map(esc).join('<br>')}</div>` : '';
+  const head = `
+    <div class="imp-summary">
+      <span>识别为 <b>${esc(res.source_label)}</b>${res.encoding ? ' · ' + esc(res.encoding) : ''}</span>
+      <span class="muted">${esc(res.filename || '')}</span>
+    </div>
+    <div class="imp-stats">
+      <span>共 <b>${s.total || 0}</b></span>
+      <span class="ok">新增 <b>${s.new || 0}</b></span>
+      ${s.duplicate ? `<span class="warn">重复 <b>${s.duplicate}</b></span>` : ''}
+      ${s.skipped ? `<span class="muted">跳过 <b>${s.skipped}</b></span>` : ''}
+      ${s.no_account ? `<span class="neg">未定账户 <b>${s.no_account}</b></span>` : ''}
+    </div>${warn}`;
+
+  const rows = (res.rows || []).map((r, i) => impRowHtml(r, i)).join('');
+  const unmatched = s.unmatched_pay_methods || [];
+  const unmatchedHtml = unmatched.length ? `
+    <div class="imp-unmatched">
+      <div class="imp-unmatched-title">这些支付方式还没对应账户，选一个即可顺手记住：</div>
+      ${unmatched.map((pm) => `
+        <div class="imp-unmatched-row">
+          <span class="pm">${esc(pm)}</span>
+          <select class="input tiny-input" data-pm-acc>${impAccountOptions(null)}</select>
+          <button class="btn tiny" data-pm-remember>记住</button>
+        </div>`).join('')}
+    </div>` : '';
+
+  $('#imp-preview').innerHTML = head + unmatchedHtml
+    + `<div class="imp-rows">${rows || '<div class="empty">没有解析到可导入的流水</div>'}</div>`;
+  bindImportPreviewEvents();
+  updateImportGo();
+}
+
+function impRowHtml(r, i) {
+  const isSkip = r.type === 'skip';
+  const dup = !!r.duplicate;
+  const disabled = isSkip || dup;
+  const tag = dup ? '<span class="tag warn-tag">重复</span>'
+    : isSkip ? '<span class="tag">不计收支</span>' : '';
+  const byRule = r.account_by ? `<span class="imp-by" title="由映射规则自动归属">规则「${esc(r.account_by)}」</span>` : '';
+  const pay = r.pay_method ? `<span class="imp-pay">${esc(r.pay_method)}</span>` : '';
+  const note = r.note || r.counterparty || '';
+  const sign = r.type === 'in' ? '收' : r.type === 'out' ? '支' : '·';
+  return `<div class="imp-row${disabled ? ' is-dim' : ''}">
+    <label class="imp-check"><input type="checkbox" data-check="${i}"${r.selected && !disabled ? ' checked' : ''}${disabled ? ' disabled' : ''}></label>
+    <span class="imp-date">${esc((r.date || '').slice(5, 10))}</span>
+    <span class="imp-type ${r.type === 'in' ? 'pos' : r.type === 'out' ? 'neg' : ''}">${sign}</span>
+    <span class="imp-note" title="${esc(note)}">${esc(note)} ${tag}${pay}</span>
+    <span class="imp-amt ${r.type === 'in' ? 'pos' : r.type === 'out' ? 'neg' : ''}">${fmt(r.amount)}</span>
+    <span class="imp-acct">${disabled ? '<span class="muted">跳过</span>'
+      : `<select class="input tiny-input" data-acct="${i}">${impAccountOptions(r.account_id)}</select>${byRule}`}</span>
+  </div>`;
+}
+
+function bindImportPreviewEvents() {
+  const box = $('#imp-preview');
+  box.querySelectorAll('[data-check]').forEach((cb) => cb.addEventListener('change', updateImportGo));
+  box.querySelectorAll('[data-acct]').forEach((sel) => sel.addEventListener('change', () => {
+    const i = parseInt(sel.dataset.acct, 10);
+    if (impState.preview && impState.preview.rows[i]) {
+      impState.preview.rows[i].account_id = parseInt(sel.value, 10);
+    }
+    updateImportGo();
+  }));
+  box.querySelectorAll('[data-pm-remember]').forEach((btn) => btn.addEventListener('click', async () => {
+    const row = btn.closest('.imp-unmatched-row');
+    const pm = row.querySelector('.pm').textContent;
+    const accountId = parseInt(row.querySelector('select').value, 10);
+    if (!accountId) return;
+    try {
+      await api('/api/payee-rules', { method: 'POST', body: { pattern: pm, account_id: accountId, priority: 50 } });
+      const acct = state.accounts.find((a) => a.id === accountId);
+      toast(`已记住：${pm} → ${acct ? acct.name : ''}`);
+      await refreshImportSources();
+      await renderImportRules();
+      await previewImport();
+    } catch (err) { toast(err.message, true); }
+  }));
+}
+
+function updateImportGo() {
+  const rows = (impState.preview && impState.preview.rows) || [];
+  let n = 0; let sumIn = 0; let sumOut = 0;
+  rows.forEach((r, i) => {
+    const cb = $('#imp-preview [data-check="' + i + '"]');
+    const on = cb ? cb.checked : false;
+    r.selected = on;
+    if (!on || !r.account_id) return;
+    n += 1;
+    if (r.type === 'in') sumIn += r.amount; else if (r.type === 'out') sumOut += r.amount;
+  });
+  const btn = $('#imp-go');
+  if (!btn) return;
+  btn.disabled = n === 0;
+  btn.textContent = n ? `导入 ${n} 笔（收入 ${fmt0(sumIn)} · 支出 ${fmt0(sumOut)}）` : '确认导入';
+}
+
+async function doImport() {
+  const rows = (impState.preview && impState.preview.rows) || [];
+  const payload = rows.filter((r) => r.selected && r.account_id && r.type !== 'skip').map((r) => ({
+    date: r.date,
+    type: r.type,
+    amount: r.amount,
+    account_id: r.account_id,
+    category_id: r.category_id || null,
+    note: r.note || '',
+    external_id: r.external_id || null,
+    source: r.source || null,
+    selected: true,
+  }));
+  if (!payload.length) return toast('没有可导入的行', true);
+  const btn = $('#imp-go');
+  btn.disabled = true;
+  try {
+    const res = await api('/api/import/commit', {
+      method: 'POST',
+      body: { rows: payload, label: (impState.preview && impState.preview.source_label) || 'import' },
+    });
+    let msg = `导入 ${res.imported} 笔`;
+    if (res.skipped) msg += `，重复跳过 ${res.skipped}`;
+    if (res.failed) msg += `，失败 ${res.failed}`;
+    toast(msg);
     await loadOverview();
-    await loadTransactions();
-  } catch (err) { toast(err.message, true); }
+    await reloadAll();
+    if (currentView() === 'transactions') loadTransactions();
+    // 再预览一次：刚导入的行会标成「重复」，方便接着传下一个文件
+    if (impState.file) { await previewImport(); await renderImportRules(); }
+    else closeModal();
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false;
+  }
 }
 
 /* ---------------- 持仓 ---------------- */
@@ -528,8 +776,11 @@ async function renderAutoPanel() {
   $('#auto-interval').value = s.quote_interval_min;
   $('#auto-hour').value = s.snapshot_hour;
   $('#auto-rates').value = s.rates_interval_hour;
+  $('#auto-inbox').value = s.inbox_interval_min;
+  $('#auto-mail').value = s.mail_interval_min;
 
   const lr = s.last_quote_result;
+  const inbox = s.inbox || {};
   const rows = [
     ['运行状态', s.running ? '后台任务在跑' : '未启动'],
     ['上次刷新行情', s.last_quote_at || '还没跑过'],
@@ -537,6 +788,9 @@ async function renderAutoPanel() {
     ['上次刷新汇率', s.last_rates_at || '还没跑过'],
     ['最近净值快照', s.last_snapshot_date || '还没记'],
     ['上次结果', lr ? `成功 ${lr.ok}/${lr.total}${lr.failed && lr.failed.length ? ` · 失败 ${lr.failed.length}` : ''}` : '—'],
+    ['收件目录', `${inbox.pending || 0} 个待处理 · 已导入 ${inbox.imported || 0}${inbox.failed ? ' · 失败 ' + inbox.failed : ''}`],
+    ['上次扫收件目录', s.last_inbox_at || '还没跑过'],
+    ['邮箱收账单', s.mail_configured ? `已配置 · 上次 ${s.last_mail_at || '还没跑过'}` : '未配置（设 ASSETBOOK_IMAP_* 后启用）'],
   ];
   $('#auto-status').innerHTML = rows.map(([k, v]) =>
     `<div class="auto-row"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('');
@@ -556,6 +810,8 @@ async function saveAutoSettings() {
         quote_interval_min: parseInt($('#auto-interval').value, 10) || 30,
         snapshot_hour: parseInt($('#auto-hour').value, 10) || 0,
         rates_interval_hour: parseInt($('#auto-rates').value, 10) || 12,
+        inbox_interval_min: parseInt($('#auto-inbox').value, 10) || 10,
+        mail_interval_min: parseInt($('#auto-mail').value, 10) || 60,
       },
     });
     toast('设置已保存');
@@ -954,6 +1210,20 @@ function bind() {
     } catch (err) { toast(err.message, true); } finally {
       btn.disabled = false;
       btn.textContent = '立即刷新行情';
+    }
+  });
+  $('#auto-run-inbox').addEventListener('click', async () => {
+    const btn = $('#auto-run-inbox');
+    btn.disabled = true;
+    btn.textContent = '扫描中…';
+    try {
+      const r = await api('/api/auto/run/inbox', { method: 'POST' });
+      toast(r.seen ? `处理 ${r.seen} 个文件，新增 ${r.imported} 笔` : '收件目录里没有新文件');
+      await renderAutoPanel();
+      await loadOverview();
+    } catch (err) { toast(err.message, true); } finally {
+      btn.disabled = false;
+      btn.textContent = '扫收件目录';
     }
   });
 

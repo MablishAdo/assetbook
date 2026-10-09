@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import os
-import tempfile
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 import db
+import importer
 import security
 import services as svc
-from models import AccountIn, AccountPatch, CategoryIn, ClassifyIn, RuleIn, SnapshotIn, TxIn
+from models import (AccountIn, AccountPatch, CategoryIn, ClassifyIn, ImportCommitIn, PayeeRuleIn,
+                    RuleIn, SnapshotIn, TxIn)
 
 router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(security.require_auth)])
 
@@ -240,46 +242,107 @@ def delete_transaction(tx_id: int):
 
 # ---------- 导入 ----------
 
+@router.get("/import/sources")
+def import_sources():
+    """支持的账单来源 + 收件目录状态 + 支付方式映射规则。"""
+    import intake
+    import parsers
+
+    return {
+        "sources": [{"value": k, "label": v} for k, v in parsers.SOURCES.items()],
+        "payee_rules": importer.list_payee_rules(),
+        "batches": importer.list_batches(),
+        "inbox": intake.inbox_status(),
+        "mail_configured": intake.imap_config() is not None,
+    }
+
+
+@router.post("/import/preview")
+async def import_preview(
+    file: UploadFile = File(...),
+    account_id: int | None = Form(None),
+    zip_password: str = Form(""),
+):
+    """上传账单，解析并预演：识别来源、自动分类、自动对账户、标出重复。"""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "空文件")
+    got = importer.import_bytes(raw, file.filename or "bill.csv",
+                                default_account_id=account_id,
+                                zip_password=zip_password, dry_run=True)
+    if not got["ok"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, got.get("error", "解析失败"))
+    return got
+
+
+@router.post("/import/commit")
+def import_commit(payload: ImportCommitIn):
+    """把确认过的行写进流水（重复单号会自动跳过）。"""
+    rows = [r.model_dump() for r in payload.rows]
+    return importer.commit(rows, payload.label)
+
+
+@router.delete("/import/batch/{batch}")
+def import_undo(batch: str):
+    """撤销一整次导入。"""
+    return {"removed": importer.undo_batch(batch)}
+
+
+@router.post("/import/inbox/scan")
+async def import_scan_inbox():
+    """立刻扫一次收件目录。"""
+    import intake
+
+    return await asyncio.to_thread(intake.scan_inbox)
+
+
+@router.post("/import/mail/fetch")
+async def import_fetch_mail():
+    """立刻去邮箱收一次账单。"""
+    import intake
+
+    return await asyncio.to_thread(intake.fetch_mail)
+
+
+# ---------- 支付方式 → 账户 映射 ----------
+
+@router.get("/payee-rules")
+def list_payee_rules():
+    return {"items": importer.list_payee_rules()}
+
+
+@router.post("/payee-rules", status_code=201)
+def create_payee_rule(payload: PayeeRuleIn):
+    rid = importer.add_payee_rule(payload.pattern, payload.account_id,
+                                  payload.priority, payload.source)
+    return {"id": rid}
+
+
+@router.delete("/payee-rules/{rule_id}", status_code=204)
+def delete_payee_rule(rule_id: int):
+    importer.delete_payee_rule(rule_id)
+    return None
+
+
 @router.post("/transactions/import")
 async def import_csv(
     file: UploadFile = File(...),
     account_id: int = Form(...),
     dry_run: bool = Form(True),
 ):
-    """导入支付宝/微信/通用 CSV 账单。dry_run=true 只返回预览。"""
-    suffix = os.path.splitext(file.filename or "bill.csv")[1] or ".csv"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
-        path = tmp.name
-    try:
-        rows = svc.read_csv_rows(path)
-        normalized, warnings = svc.normalize_rows(rows)
-        if not normalized:
-            return {"imported": 0, "preview": [], "warnings": warnings or ["没有可导入的行"]}
-
-        if dry_run:
-            preview = []
-            for r in normalized[:50]:
-                cid, how = svc.classify(r["note"], r["type"])
-                row = db.q1("SELECT name FROM categories WHERE id = ?", (cid,)) if cid else None
-                preview.append({**r, "category_name": row["name"] if row else None, "by": how})
-            return {"imported": 0, "rows": len(normalized), "preview": preview,
-                    "warnings": warnings, "sum_in": round(sum(x["amount"] for x in normalized if x["type"] == "in"), 2),
-                    "sum_out": round(sum(x["amount"] for x in normalized if x["type"] == "out"), 2)}
-
-        imported = 0
-        for r in normalized:
-            cid, _ = svc.classify(r["note"], r["type"])
-            db.execute(
-                "INSERT INTO transactions (date, type, amount, account_id, category_id, note, source, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'import', ?)",
-                (r["date"], r["type"], r["amount"], account_id, cid, r["note"], svc.today()),
-            )
-            imported += 1
-        db.snapshot_networth()
-        return {"imported": imported, "warnings": warnings}
-    finally:
-        os.unlink(path)
+    """老接口保留：一步导入，不预演。新界面走 /import/preview + /import/commit。"""
+    raw = await file.read()
+    got = importer.import_bytes(raw, file.filename or "bill.csv",
+                                default_account_id=account_id,
+                                zip_password=os.environ.get("ASSETBOOK_WECHAT_ZIP_PASSWORD", ""),
+                                dry_run=dry_run, auto_commit=not dry_run)
+    if not got["ok"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, got.get("error", "解析失败"))
+    if dry_run:
+        return {"imported": 0, "rows": got["stats"]["total"],
+                "preview": got["rows"][:50], "warnings": got["warnings"],
+                "sum_in": got["stats"]["sum_in"], "sum_out": got["stats"]["sum_out"]}
+    return {**got["committed"], "warnings": got["warnings"]}
 
 
 # ---------- 导出 ----------

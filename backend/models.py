@@ -99,10 +99,38 @@ class AutoSyncIn(BaseModel):
     quote_interval_min: Optional[int] = Field(default=None, ge=5, le=1440)
     snapshot_hour: Optional[int] = Field(default=None, ge=0, le=23)
     rates_interval_hour: Optional[int] = Field(default=None, ge=1, le=168)
+    inbox_interval_min: Optional[int] = Field(default=None, ge=1, le=1440)
+    mail_interval_min: Optional[int] = Field(default=None, ge=5, le=1440)
+
+
+class PayeeRuleIn(BaseModel):
+    pattern: str = Field(min_length=1, max_length=60, description="支付方式里包含这个词就命中")
+    account_id: int
+    priority: int = 100
+    source: Optional[Literal["alipay", "wechat", "bank", "generic"]] = None
+
+
+class ImportRow(BaseModel):
+    """用户在预览界面上确认过的行。"""
+    date: str
+    type: TxType
+    amount: float
+    account_id: int
+    category_id: Optional[int] = None
+    note: Optional[str] = None
+    external_id: Optional[str] = None
+    source: Optional[str] = None
+    selected: bool = True
+
+
+class ImportCommitIn(BaseModel):
+    rows: list[ImportRow]
+    label: str = "import"
 
 
 class PriceIn(BaseModel):
-    price: float = Field(ge=0)
+    # 传 0（或不传）表示「去行情接口自动拉一次」
+    price: float = Field(default=0, ge=0)
     price_date: Optional[str] = None
 
 

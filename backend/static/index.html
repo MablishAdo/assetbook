@@ -300,7 +300,10 @@
           <div class="panel">
             <div class="panel-head">
               <h2><i>02</i>自动同步</h2>
-              <button class="btn ghost" id="auto-run-quotes" type="button">立即刷新行情</button>
+              <div class="head-actions">
+                <button class="btn ghost" id="auto-run-quotes" type="button">立即刷新行情</button>
+                <button class="btn ghost" id="auto-run-inbox" type="button">扫收件目录</button>
+              </div>
             </div>
 
             <div id="auto-status" class="auto-status"></div>
@@ -322,11 +325,23 @@
                 <span>汇率刷新间隔（小时）</span>
                 <input class="input" type="number" id="auto-rates" min="1" max="168">
               </label>
+              <label class="field">
+                <span>扫收件目录间隔（分钟）</span>
+                <input class="input" type="number" id="auto-inbox" min="1" max="1440">
+              </label>
+              <label class="field">
+                <span>收邮件间隔（分钟）</span>
+                <input class="input" type="number" id="auto-mail" min="5" max="1440">
+              </label>
             </div>
             <button class="btn primary block" id="auto-save" type="button">保存设置</button>
 
             <div class="auto-log" id="auto-log"></div>
-            <p class="hint">行情来自腾讯 / 东方财富的公开接口，不需要填任何 Key。场外基金一天只更新一次净值，间隔设 30 分钟以上就够。</p>
+            <p class="hint">
+              行情来自腾讯 / 东方财富的公开接口，不需要填任何 Key。场外基金一天只更新一次净值，间隔设 30 分钟以上就够。<br>
+              账单自动收取见「记账 → 导入账单」：把支付宝 / 微信 / 银行导出的文件丢进收件目录，或配好
+              <code>ASSETBOOK_IMAP_*</code> 环境变量后自动收邮件。
+            </p>
           </div>
 
           <div class="panel">
@@ -374,7 +389,7 @@
 
 <div id="toast" class="toast"></div>
 <div id="modal" class="modal" hidden>
-  <div class="modal-card">
+  <div class="modal-card" id="modal-card">
     <div class="modal-head"><h3 id="modal-title">标题</h3><button class="icon-btn" id="modal-close" type="button">×</button></div>
     <div class="modal-body" id="modal-body"></div>
   </div>

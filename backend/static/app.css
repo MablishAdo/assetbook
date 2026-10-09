@@ -500,6 +500,70 @@ code { font: 12px/1.4 var(--mono); background: var(--accent-soft); padding: 1px 
 .auto-log-item.warn { color: var(--warn, #a8701c); }
 .auto-log-item.error { color: var(--neg); }
 
+/* ---------- 账单导入 ---------- */
+
+.modal-card.is-wide { width: min(760px, 100%); }
+
+.imp-channels { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
+.imp-channel {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+.imp-channel-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; font-size: 12px; }
+.imp-channel-main strong { font-size: 12px; }
+.imp-channel-main .muted { color: var(--muted); }
+.imp-path { font-size: 11px; color: var(--muted); background: transparent; padding: 0; min-width: 0; overflow-wrap: anywhere; word-break: break-all; }
+
+.imp-summary { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 14px 0 8px; font-size: 13px; }
+.imp-summary .muted { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.imp-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted);
+  padding: 8px 10px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm);
+}
+.imp-stats b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.imp-stats .ok b { color: var(--pos); }
+.imp-stats .warn b { color: var(--amber); }
+.imp-stats .neg b { color: var(--neg); }
+.imp-warn { margin-top: 8px; font-size: 12px; color: var(--amber); line-height: 1.6; }
+
+.imp-unmatched { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.imp-unmatched-title { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+.imp-unmatched-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; flex-wrap: wrap; }
+.imp-unmatched-row .pm { font-weight: 600; font-size: 12px; flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+
+.imp-rows { margin-top: 12px; max-height: 42vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.imp-row { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.imp-row:last-child { border-bottom: 0; }
+.imp-row.is-dim { opacity: .5; }
+.imp-check { flex: none; display: flex; }
+.imp-check input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+.imp-date { flex: none; width: 42px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.imp-type { flex: none; width: 16px; text-align: center; font-weight: 600; }
+.imp-note { flex: 1 1 150px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-pay { margin-left: 6px; font-size: 10px; color: var(--muted); }
+.imp-amt { flex: none; min-width: 84px; text-align: right; font-family: var(--serif); font-weight: 600; font-variant-numeric: tabular-nums; }
+.imp-acct { flex: none; display: flex; align-items: center; gap: 5px; }
+.imp-acct .muted { font-size: 11px; }
+.imp-by { font-size: 10px; color: var(--accent); white-space: nowrap; }
+
+.tiny-input { padding: 4px 8px; font-size: 12px; width: auto; min-width: 96px; max-width: 150px; }
+.tag.warn-tag { border-color: var(--amber); color: var(--amber); }
+
+.imp-rules-wrap { margin-top: 16px; }
+.imp-section-title { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 14px 0 8px; }
+.imp-rule-grid { display: flex; flex-direction: column; gap: 6px; }
+.imp-rule, .imp-batch {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 12px;
+}
+.imp-rule-pat { font-weight: 600; }
+.imp-rule .arrow { color: var(--muted); }
+.imp-rule-acc { flex: 1 1 auto; min-width: 0; }
+.imp-rule .btn, .imp-batch .btn { margin-left: auto; }
+.imp-batch-name { font-family: var(--mono); font-size: 11px; }
+.imp-batch .muted { color: var(--muted); }
+
 @media print {
   .side, .topbar-actions, .toast, .modal { display: none !important; }
   .shell { grid-template-columns: minmax(0, 1fr); }

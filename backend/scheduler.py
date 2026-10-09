@@ -1,9 +1,11 @@
 """自动同步调度器 —— 用 asyncio 后台任务定时干活，不引入 APScheduler。
 
-两件事：
+五件事：
   1. 定时刷新持仓现价（场外基金净值一天只更新一次，所以间隔不用太密）
   2. 每天定时把当天的资产/负债/净值落到 networth 表，攒出长期曲线
   3. 顺带定时刷新汇率
+  4. 定时扫 data/inbox/ 收件目录，把丢进去的账单自动入库
+  5. 定时去 IMAP 邮箱收账单附件（配了才跑）
 
 配置优先级：数据库里的设置（界面可改） > 环境变量 > 代码默认值。
 所有状态都放在内存里，重启即重置；这本来就是「尽力而为」的后台任务。
@@ -28,6 +30,8 @@ DEFAULTS = {
     "quote_interval_min": "30",
     "snapshot_hour": "23",
     "rates_interval_hour": "12",
+    "inbox_interval_min": "10",
+    "mail_interval_min": "60",
 }
 
 
@@ -37,6 +41,8 @@ def _env_defaults() -> dict[str, str]:
         "quote_interval_min": os.environ.get("ASSETBOOK_QUOTE_INTERVAL_MIN", DEFAULTS["quote_interval_min"]),
         "snapshot_hour": os.environ.get("ASSETBOOK_SNAPSHOT_HOUR", DEFAULTS["snapshot_hour"]),
         "rates_interval_hour": os.environ.get("ASSETBOOK_RATES_INTERVAL_HOUR", DEFAULTS["rates_interval_hour"]),
+        "inbox_interval_min": os.environ.get("ASSETBOOK_INBOX_INTERVAL_MIN", DEFAULTS["inbox_interval_min"]),
+        "mail_interval_min": os.environ.get("ASSETBOOK_MAIL_INTERVAL_MIN", DEFAULTS["mail_interval_min"]),
     }
 
 
@@ -65,6 +71,8 @@ class Scheduler:
         self.next_quote_at: datetime | None = None
         self.last_snapshot_date: str | None = None
         self.last_rates_at: datetime | None = None
+        self.last_inbox_at: datetime | None = None
+        self.last_mail_at: datetime | None = None
         self.log: list[dict] = []
 
     # ---------------- 日志 ----------------
@@ -108,6 +116,10 @@ class Scheduler:
                         await self._do_quotes()
                     if self._rates_due():
                         await self._do_rates()
+                    if self._due(self.last_inbox_at, "inbox_interval_min"):
+                        await self._do_inbox()
+                    if self._due(self.last_mail_at, "mail_interval_min"):
+                        await self._do_mail()
                     self._maybe_snapshot()
             except asyncio.CancelledError:
                 raise
@@ -125,6 +137,52 @@ class Scheduler:
         if self.last_rates_at is None:
             return True
         return datetime.now() - self.last_rates_at >= timedelta(hours=hours)
+
+    def _due(self, last: datetime | None, key: str) -> bool:
+        if last is None:
+            return True
+        return datetime.now() - last >= timedelta(minutes=_as_int(key, 1, 1440))
+
+    # ---------------- 账单调入 ----------------
+
+    async def _do_inbox(self) -> None:
+        import intake
+
+        try:
+            r = await asyncio.to_thread(intake.scan_inbox)
+        except Exception as e:                          # noqa: BLE001
+            self._note("inbox", f"扫收件目录失败：{e}", "warn")
+            self.last_inbox_at = datetime.now()
+            return
+        self.last_inbox_at = datetime.now()
+        if r["seen"] == 0:
+            return                                      # 没新文件就不刷日志
+        if r["imported"]:
+            msg = f"收件目录导入 {r['imported']} 笔"
+            if r["skipped"]:
+                msg += f"（重复跳过 {r['skipped']}）"
+            self._note("inbox", msg)
+        if r["failed"]:
+            self._note("inbox", f"{r['failed']} 个文件没认出来，已移到 inbox/failed", "warn")
+
+    async def _do_mail(self) -> None:
+        import intake
+
+        if not intake.imap_config():
+            self.last_mail_at = datetime.now()
+            return
+        try:
+            r = await asyncio.to_thread(intake.fetch_mail)
+        except Exception as e:                          # noqa: BLE001
+            self._note("mail", f"收邮件失败：{e}", "warn")
+            self.last_mail_at = datetime.now()
+            return
+        self.last_mail_at = datetime.now()
+        if not r.get("ok"):
+            self._note("mail", f"收邮件失败：{r.get('error')}", "warn")
+        elif r["files"]:
+            self._note("mail", f"邮件账单：读了 {r['mails']} 封、{r['files']} 个附件，"
+                               f"新增 {r['imported']} 笔")
 
     # ---------------- 具体任务 ----------------
 
@@ -185,22 +243,47 @@ class Scheduler:
             self.last_snapshot_date = datetime.now().date().isoformat()
             self._note("networth", "手动记录了净值快照")
             return {"ok": True}
+        if what == "inbox":
+            import intake
+
+            r = await asyncio.to_thread(intake.scan_inbox)
+            self.last_inbox_at = datetime.now()
+            if r["seen"]:
+                self._note("inbox", f"手动扫描：处理 {r['seen']} 个文件，新增 {r['imported']} 笔")
+            return r
+        if what == "mail":
+            r = await asyncio.to_thread(__import__("intake").fetch_mail)
+            self.last_mail_at = datetime.now()
+            return r
         raise ValueError(f"不认识的任务：{what}")
 
     # ---------------- 状态 ----------------
 
     def status(self) -> dict:
+        try:
+            import intake
+
+            inbox = intake.inbox_status()
+            mail_ready = intake.imap_config() is not None
+        except Exception:                               # noqa: BLE001
+            inbox, mail_ready = {}, False
         return {
             "enabled": setting("auto_sync") == "1",
             "running": self.running,
             "quote_interval_min": _as_int("quote_interval_min", 5, 1440),
             "snapshot_hour": _as_int("snapshot_hour", 0, 23),
             "rates_interval_hour": _as_int("rates_interval_hour", 1, 168),
+            "inbox_interval_min": _as_int("inbox_interval_min", 1, 1440),
+            "mail_interval_min": _as_int("mail_interval_min", 5, 1440),
             "last_quote_at": self.last_quote_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_quote_at else None,
             "next_quote_at": self.next_quote_at.strftime("%Y-%m-%d %H:%M:%S") if self.next_quote_at else None,
             "last_quote_result": self.last_quote_result,
             "last_snapshot_date": self.last_snapshot_date,
             "last_rates_at": self.last_rates_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_rates_at else None,
+            "last_inbox_at": self.last_inbox_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_inbox_at else None,
+            "last_mail_at": self.last_mail_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_mail_at else None,
+            "inbox": inbox,
+            "mail_configured": mail_ready,
             "log": self.log[:20],
         }
 

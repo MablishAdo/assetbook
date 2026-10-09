@@ -58,7 +58,10 @@ CREATE TABLE IF NOT EXISTS transactions (
   to_account_id INTEGER,
   category_id   INTEGER,
   note          TEXT,
-  source        TEXT    NOT NULL DEFAULT 'manual', -- manual / import / api
+  source        TEXT    NOT NULL DEFAULT 'manual', -- manual / import / inbox / mail / api
+  external_id   TEXT,                              -- 账单原始单号，用来去重
+  batch         TEXT,                              -- 导入批次号，用来整批撤销
+  raw           TEXT,                              -- 原始账单行（JSON），排查用
   created_at    TEXT    NOT NULL,
   FOREIGN KEY (account_id)    REFERENCES accounts (id) ON DELETE CASCADE,
   FOREIGN KEY (to_account_id) REFERENCES accounts (id) ON DELETE SET NULL,
@@ -66,6 +69,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_tx_date    ON transactions (date);
 CREATE INDEX IF NOT EXISTS idx_tx_account ON transactions (account_id);
+-- 去重索引见 INDEX_PATCHES：必须等 external_id 列的迁移跑完才能建
 
 CREATE TABLE IF NOT EXISTS rules (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +78,16 @@ CREATE TABLE IF NOT EXISTS rules (
   priority    INTEGER NOT NULL DEFAULT 100,
   enabled     INTEGER NOT NULL DEFAULT 1,
   FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
+);
+
+-- 账单里的「收/付款方式」→ 账户。比如「招商银行(1234)」记到招行卡
+CREATE TABLE IF NOT EXISTS payee_rules (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  pattern    TEXT    NOT NULL,                     -- 支付方式里包含这个词就命中
+  account_id INTEGER NOT NULL,
+  priority   INTEGER NOT NULL DEFAULT 100,
+  source     TEXT,                                 -- 限定来源（alipay/wechat/bank），空=不限
+  FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS holdings (
@@ -177,11 +191,20 @@ def set_meta(key: str, value: str) -> None:
     )
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 # 老库升级用的补丁：列名 → 建表语句里的定义。加新列写这里就行。
 MIGRATIONS: list[tuple[str, str, str]] = [
     ("holdings", "market", "TEXT NOT NULL DEFAULT 'auto'"),
+    ("transactions", "external_id", "TEXT"),
+    ("transactions", "batch", "TEXT"),
+    ("transactions", "raw", "TEXT"),
+]
+
+# 建表之后要补的索引（老库没有的）
+INDEX_PATCHES = [
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_ext ON transactions (external_id) "
+    "WHERE external_id IS NOT NULL",
 ]
 
 
@@ -193,15 +216,19 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _migrate(conn: sqlite3.Connection) -> list[str]:
-    """对老库补齐缺失的列，返回实际做了哪些改动（用于日志）。"""
+    """对老库补齐缺失的列与索引，返回实际做了哪些改动（用于日志）。"""
     done: list[str] = []
     for table, column, ddl in MIGRATIONS:
-        if not _columns(conn, table):
-            continue                       # 表还不存在，建表语句里已经有了
-        if column in _columns(conn, table):
-            continue
+        cols = _columns(conn, table)
+        if not cols or column in cols:
+            continue                       # 表不存在（建表语句已含新列）或列已存在
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
         done.append(f"{table}.{column}")
+    for ddl in INDEX_PATCHES:
+        try:
+            conn.execute(ddl)
+        except sqlite3.Error as e:
+            done.append(f"索引补建失败：{e}")
     return done
 
 
