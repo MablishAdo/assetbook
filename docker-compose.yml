@@ -1,0 +1,26 @@
+services:
+  assetbook:
+    build: .
+    image: assetbook:latest
+    container_name: assetbook
+    restart: unless-stopped
+    ports:
+      # 左边是你机器上的端口，想换就改这里，比如 "9000:8000"
+      - "8000:8000"
+    environment:
+      # 首次启动自动设置登录密码（之后改密码在界面「设置」里改）
+      ASSETBOOK_PASSWORD: ${ASSETBOOK_PASSWORD:-}
+      # 会话签名密钥；不填也会自动生成并存在数据库里。
+      # 若填了固定值，请务必改成一串随机字符，且别提交到 git。
+      ASSETBOOK_SECRET: ${ASSETBOOK_SECRET:-}
+      # 可选：接入 OpenAI 兼容接口做「AI 智能分类」
+      ASSETBOOK_AI_BASE: ${ASSETBOOK_AI_BASE:-}
+      ASSETBOOK_AI_KEY: ${ASSETBOOK_AI_KEY:-}
+      ASSETBOOK_AI_MODEL: ${ASSETBOOK_AI_MODEL:-}
+      TZ: Asia/Shanghai
+    volumes:
+      # 账本数据（assetbook.db）就存在这个具名卷里，容器删了也不会丢
+      - assetbook-data:/data
+
+volumes:
+  assetbook-data:

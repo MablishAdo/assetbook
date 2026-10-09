@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1c6b52">
+  <title>AssetBook · 资产账本</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- ===== 登录 / 首次设置密码 ===== -->
+<div class="gate" id="gate" hidden>
+  <div class="gate-card">
+    <div class="gate-brand">
+      <span class="logo">AB</span>
+      <div>
+        <strong>AssetBook</strong>
+        <span>资产管理与记账系统</span>
+      </div>
+    </div>
+
+    <form id="gate-form">
+      <h2 id="gate-title">输入密码</h2>
+      <p class="gate-hint" id="gate-hint">数据只存在你自己的服务器上。</p>
+      <label class="field">
+        <span>密码</span>
+        <input class="input" type="password" id="gate-password" autocomplete="current-password" required minlength="6">
+      </label>
+      <label class="field" id="gate-confirm-wrap" hidden>
+        <span>再输一遍</span>
+        <input class="input" type="password" id="gate-confirm" autocomplete="new-password">
+      </label>
+      <button class="btn primary block" type="submit" id="gate-submit">进入账本</button>
+      <p class="gate-foot">至少 6 位。忘记密码只能删掉 assetbook.db 重置（账本会清空，动手前先备份）。</p>
+    </form>
+  </div>
+</div>
+
+<!-- ===== 主界面 ===== -->
+<div class="shell" id="app" hidden>
+
+  <aside class="side">
+    <div class="brand">
+      <span class="logo">AB</span>
+      <div>
+        <strong>AssetBook</strong>
+        <span>资产账本</span>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button data-view="overview"     class="nav-item">概览</button>
+      <button data-view="transactions" class="nav-item">记账</button>
+      <button data-view="holdings"     class="nav-item">持仓</button>
+      <button data-view="budgets"      class="nav-item">预算</button>
+      <button data-view="settings"     class="nav-item">设置</button>
+    </nav>
+
+    <div class="side-foot">
+      <button class="ghost-btn" id="theme-btn" type="button">切换主题</button>
+      <button class="ghost-btn" id="logout-btn" type="button">退出登录</button>
+      <div class="version" id="version"></div>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="topbar">
+      <h1 id="page-title">概览</h1>
+      <div class="topbar-actions" id="topbar-actions"></div>
+    </header>
+
+    <!-- ========== 概览 ========== -->
+    <section class="view" data-view="overview">
+
+      <div class="panel statement">
+        <div class="statement-main">
+          <div class="label">净资产 · Net Worth</div>
+          <div class="val" id="ov-net">¥0</div>
+        </div>
+        <div class="statement-side">
+          <div class="row"><span>总资产</span><strong id="ov-assets">¥0</strong></div>
+          <div class="row"><span>总负债</span><strong id="ov-liab">¥0</strong></div>
+          <div class="row"><span>投资市值</span><strong id="ov-invest">¥0</strong></div>
+        </div>
+        <div class="stats" id="ov-kpis"></div>
+      </div>
+
+      <div class="cols">
+        <div class="col-main">
+          <div class="panel">
+            <div class="panel-head">
+              <h2><i>01</i>净值走势</h2>
+              <div class="seg" id="nw-range">
+                <button class="seg-btn is-on" data-range="30">30 天</button>
+                <button class="seg-btn" data-range="12">12 个月</button>
+              </div>
+            </div>
+            <div class="chart-box">
+              <svg id="nw-chart" viewBox="0 0 800 240" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="chart-foot" id="nw-foot"></div>
+          </div>
+
+          <div class="panel">
+            <h2><i>02</i>本月支出 · 分类</h2>
+            <div id="ov-cats" class="cat-bars"></div>
+          </div>
+        </div>
+
+        <div class="col-side">
+          <div class="panel">
+            <h2><i>03</i>资产配置</h2>
+            <div class="donut-row">
+              <svg id="alloc-donut" viewBox="0 0 200 200"></svg>
+              <div class="legend" id="alloc-legend"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2><i>04</i>账户</h2>
+            <div id="ov-accounts" class="acct-list"></div>
+          </div>
+
+          <div class="panel">
+            <h2><i>05</i>最近流水</h2>
+            <div id="ov-recent" class="mini-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 记账 ========== -->
+    <section class="view" data-view="transactions" hidden>
+      <div class="panel">
+        <h2><i>01</i>记一笔</h2>
+        <form id="tx-form" class="quick-form">
+          <label class="field">
+            <span>日期</span>
+            <input class="input" type="date" name="date" required>
+          </label>
+          <label class="field">
+            <span>类型</span>
+            <select class="input" name="type" id="tx-type">
+              <option value="out">支出</option>
+              <option value="in">收入</option>
+              <option value="transfer">转账</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>金额</span>
+            <input class="input" type="number" step="0.01" min="0" name="amount" placeholder="0.00" required>
+          </label>
+          <label class="field">
+            <span>账户</span>
+            <select class="input" name="account_id" id="tx-account" required></select>
+          </label>
+          <label class="field" id="tx-to-wrap" hidden>
+            <span>转入</span>
+            <select class="input" name="to_account_id" id="tx-to"></select>
+          </label>
+          <label class="field">
+            <span>分类</span>
+            <select class="input" name="category_id" id="tx-category">
+              <option value="">自动分类</option>
+            </select>
+          </label>
+          <label class="field grow">
+            <span>备注</span>
+            <input class="input" type="text" name="note" placeholder="例如：麦当劳午餐">
+          </label>
+          <button class="btn primary" type="submit">保存</button>
+        </form>
+        <p class="hint">备注先过「分类规则」，命中就自动归类；设置里可以加规则，也可以配 AI 兜底。</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2><i>02</i>流水明细</h2>
+          <div class="head-actions">
+            <button class="btn" id="import-btn" type="button">导入账单</button>
+            <a class="btn ghost" href="/api/export/transactions.csv">导出 CSV</a>
+          </div>
+        </div>
+
+        <div class="filters">
+          <input class="input" id="f-q" type="search" placeholder="搜索备注或分类">
+          <select class="input" id="f-type">
+            <option value="">全部类型</option>
+            <option value="out">支出</option>
+            <option value="in">收入</option>
+            <option value="transfer">转账</option>
+          </select>
+          <select class="input" id="f-account"><option value="">全部账户</option></select>
+          <input class="input" id="f-month" type="month">
+          <button class="btn ghost" id="f-reset" type="button">清空</button>
+          <span class="count" id="f-count"></span>
+        </div>
+
+        <div class="table-wrap">
+          <table class="table responsive" id="tx-table">
+            <thead>
+              <tr>
+                <th>日期</th><th>类型</th><th>账户</th><th>分类</th><th class="num">金额</th>
+                <th>备注</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="tx-body"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button class="btn ghost" id="page-prev" type="button">上一页</button>
+          <span id="page-info"></span>
+          <button class="btn ghost" id="page-next" type="button">下一页</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 持仓 ========== -->
+    <section class="view" data-view="holdings" hidden>
+      <div class="panel">
+        <div class="panel-head">
+          <h2><i>01</i>持仓总览</h2>
+          <button class="btn primary" id="holding-add" type="button">新增持仓</button>
+        </div>
+        <div class="stats" id="holding-kpis"></div>
+      </div>
+
+      <div class="cols">
+        <div class="col-main">
+          <div class="panel">
+            <h2><i>02</i>持仓明细</h2>
+            <div class="table-wrap">
+              <table class="table responsive" id="holding-table">
+                <thead>
+                  <tr>
+                    <th>名称</th><th>类型</th><th class="num">份额</th><th class="num">成本价</th>
+                    <th class="num">现价</th><th class="num">市值</th><th class="num">盈亏</th><th></th>
+                  </tr>
+                </thead>
+                <tbody id="holding-body"></tbody>
+              </table>
+            </div>
+            <p class="hint">现价可以直接在表格里改，也可以写脚本调 <code>POST /api/holdings/&lt;id&gt;/price</code> 批量推。</p>
+          </div>
+        </div>
+        <div class="col-side">
+          <div class="panel">
+            <h2><i>03</i>持仓分布</h2>
+            <div class="donut-row">
+              <svg id="holding-donut" viewBox="0 0 200 200"></svg>
+              <div class="legend" id="holding-legend"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 预算 ========== -->
+    <section class="view" data-view="budgets" hidden>
+      <div class="panel">
+        <div class="panel-head">
+          <h2><i>01</i>月度预算</h2>
+          <div class="head-actions">
+            <input class="input" id="budget-month" type="month">
+            <button class="btn primary" id="budget-add" type="button">设置预算</button>
+          </div>
+        </div>
+        <div id="budget-list" class="budget-list"></div>
+      </div>
+
+      <div class="panel">
+        <h2><i>02</i>近 12 个月收支</h2>
+        <div class="bar-chart" id="monthly-bars"></div>
+      </div>
+    </section>
+
+    <!-- ========== 设置 ========== -->
+    <section class="view" data-view="settings" hidden>
+      <div class="cols">
+        <div class="col-main">
+          <div class="panel">
+            <div class="panel-head">
+              <h2><i>01</i>账户</h2>
+              <button class="btn primary" id="account-add" type="button">新增账户</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table responsive" id="account-table">
+                <thead><tr><th>名称</th><th>类型</th><th class="num">当前余额</th><th class="num">基准</th><th></th></tr></thead>
+                <tbody id="account-body"></tbody>
+              </table>
+            </div>
+            <p class="hint">余额 = 基准 + 之后的流水。跟银行对不上时，用「校准」把实际余额写成新基准。</p>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2><i>02</i>自动分类规则</h2>
+              <button class="btn primary" id="rule-add" type="button">新增规则</button>
+            </div>
+            <div class="rule-grid" id="rule-list"></div>
+            <p class="hint">备注里包含关键词就归到对应分类，按优先级从上往下匹配。想要 AI 兜底，在容器环境变量里配上 ASSETBOOK_AI_BASE / KEY / MODEL。</p>
+          </div>
+        </div>
+
+        <div class="col-side">
+          <div class="panel">
+            <div class="panel-head">
+              <h2><i>03</i>分类</h2>
+              <button class="btn primary" id="category-add" type="button">新增</button>
+            </div>
+            <div id="category-list" class="chip-list"></div>
+          </div>
+
+          <div class="panel">
+            <h2><i>04</i>安全</h2>
+            <form id="password-form">
+              <label class="field">
+                <span>新密码</span>
+                <input class="input" type="password" id="new-password" minlength="6" placeholder="至少 6 位">
+              </label>
+              <button class="btn primary block" type="submit">修改密码</button>
+            </form>
+            <p class="hint">改完密码所有设备都要重新登录。</p>
+          </div>
+
+          <div class="panel">
+            <h2><i>05</i>数据</h2>
+            <a class="btn ghost block" href="/api/export/transactions.csv">导出全部流水 CSV</a>
+            <p class="hint">数据库文件：<code id="db-path">data/assetbook.db</code>。备份这个文件就等于备份全部账本。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+<div id="modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><h3 id="modal-title">标题</h3><button class="icon-btn" id="modal-close" type="button">×</button></div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
