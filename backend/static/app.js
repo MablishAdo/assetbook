@@ -215,8 +215,15 @@ async function loadRecent() {
 
 /* ---------------- 记账 ---------------- */
 
+function accountOptions() {
+  // 负债账户（信用卡/房贷）排到最后并标注，免得记账时误选
+  const sorted = [...state.accounts].sort((a, b) => (a.is_liability ? 1 : 0) - (b.is_liability ? 1 : 0));
+  return sorted.map((a) =>
+    `<option value="${a.id}">${esc(a.name)}${a.is_liability ? '（欠款）' : ''}</option>`).join('');
+}
+
 function fillAccountSelects() {
-  const opts = state.accounts.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  const opts = accountOptions();
   const main = $('#tx-account');
   const to = $('#tx-to');
   const filter = $('#f-account');
