@@ -17,6 +17,11 @@ services:
       ASSETBOOK_AI_BASE: ${ASSETBOOK_AI_BASE:-}
       ASSETBOOK_AI_KEY: ${ASSETBOOK_AI_KEY:-}
       ASSETBOOK_AI_MODEL: ${ASSETBOOK_AI_MODEL:-}
+      # 自动同步：定时刷新持仓现价、汇率、记净值快照（详见 .env.example）
+      ASSETBOOK_AUTO_SYNC: ${ASSETBOOK_AUTO_SYNC:-1}
+      ASSETBOOK_QUOTE_INTERVAL_MIN: ${ASSETBOOK_QUOTE_INTERVAL_MIN:-30}
+      ASSETBOOK_SNAPSHOT_HOUR: ${ASSETBOOK_SNAPSHOT_HOUR:-23}
+      ASSETBOOK_RATES_INTERVAL_HOUR: ${ASSETBOOK_RATES_INTERVAL_HOUR:-12}
       TZ: Asia/Shanghai
     volumes:
       # 账本数据（assetbook.db）就存在这个具名卷里，容器删了也不会丢

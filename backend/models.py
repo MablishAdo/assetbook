@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 TxType = Literal["in", "out", "transfer"]
 AccountKind = Literal["cash", "bank", "payment", "broker", "credit", "loan", "other"]
 HoldingKind = Literal["fund", "stock", "bond", "gold", "cash", "other"]
+Market = Literal["auto", "cn", "fund", "hk", "crypto"]
 
 
 class LoginIn(BaseModel):
@@ -69,12 +70,35 @@ class HoldingIn(BaseModel):
     code: Optional[str] = None
     name: str = Field(min_length=1, max_length=60)
     kind: HoldingKind = "fund"
+    market: Market = "auto"
     account_id: Optional[int] = None
     units: float = 0
     cost_price: float = 0
     price: float = 0
     price_date: Optional[str] = None
     note: Optional[str] = None
+    # 新建时是否顺便拉一次现价
+    fetch_price: bool = True
+
+
+class HoldingPatch(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    kind: Optional[HoldingKind] = None
+    market: Optional[Market] = None
+    account_id: Optional[int] = None
+    units: Optional[float] = None
+    cost_price: Optional[float] = None
+    price: Optional[float] = None
+    price_date: Optional[str] = None
+    note: Optional[str] = None
+
+
+class AutoSyncIn(BaseModel):
+    enabled: Optional[bool] = None
+    quote_interval_min: Optional[int] = Field(default=None, ge=5, le=1440)
+    snapshot_hour: Optional[int] = Field(default=None, ge=0, le=23)
+    rates_interval_hour: Optional[int] = Field(default=None, ge=1, le=168)
 
 
 class PriceIn(BaseModel):

@@ -68,7 +68,10 @@
   <main class="content">
     <header class="topbar">
       <h1 id="page-title">概览</h1>
-      <div class="topbar-actions" id="topbar-actions"></div>
+      <div class="topbar-actions" id="topbar-actions">
+        <span class="sync-note" id="sync-note"></span>
+        <button class="btn ghost" id="refresh-quotes" type="button" title="把所有持仓的现价刷一遍">刷新行情</button>
+      </div>
     </header>
 
     <!-- ========== 概览 ========== -->
@@ -242,7 +245,7 @@
                 <tbody id="holding-body"></tbody>
               </table>
             </div>
-            <p class="hint">现价可以直接在表格里改，也可以写脚本调 <code>POST /api/holdings/&lt;id&gt;/price</code> 批量推。</p>
+            <p class="hint">填了代码的持仓会自动从行情接口更新现价（沪深 / 场内基金 / 港股 / 场外基金 / 加密货币），也能在表格里手改。</p>
           </div>
         </div>
         <div class="col-side">
@@ -296,7 +299,39 @@
 
           <div class="panel">
             <div class="panel-head">
-              <h2><i>02</i>自动分类规则</h2>
+              <h2><i>02</i>自动同步</h2>
+              <button class="btn ghost" id="auto-run-quotes" type="button">立即刷新行情</button>
+            </div>
+
+            <div id="auto-status" class="auto-status"></div>
+
+            <div class="auto-form">
+              <label class="switch">
+                <input type="checkbox" id="auto-enabled">
+                <span>开启定时自动更新</span>
+              </label>
+              <label class="field">
+                <span>行情刷新间隔（分钟）</span>
+                <input class="input" type="number" id="auto-interval" min="5" max="1440" step="5">
+              </label>
+              <label class="field">
+                <span>每天几点记净值快照</span>
+                <input class="input" type="number" id="auto-hour" min="0" max="23">
+              </label>
+              <label class="field">
+                <span>汇率刷新间隔（小时）</span>
+                <input class="input" type="number" id="auto-rates" min="1" max="168">
+              </label>
+            </div>
+            <button class="btn primary block" id="auto-save" type="button">保存设置</button>
+
+            <div class="auto-log" id="auto-log"></div>
+            <p class="hint">行情来自腾讯 / 东方财富的公开接口，不需要填任何 Key。场外基金一天只更新一次净值，间隔设 30 分钟以上就够。</p>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2><i>03</i>自动分类规则</h2>
               <button class="btn primary" id="rule-add" type="button">新增规则</button>
             </div>
             <div class="rule-grid" id="rule-list"></div>
@@ -307,14 +342,14 @@
         <div class="col-side">
           <div class="panel">
             <div class="panel-head">
-              <h2><i>03</i>分类</h2>
+              <h2><i>04</i>分类</h2>
               <button class="btn primary" id="category-add" type="button">新增</button>
             </div>
             <div id="category-list" class="chip-list"></div>
           </div>
 
           <div class="panel">
-            <h2><i>04</i>安全</h2>
+            <h2><i>05</i>安全</h2>
             <form id="password-form">
               <label class="field">
                 <span>新密码</span>
@@ -326,7 +361,7 @@
           </div>
 
           <div class="panel">
-            <h2><i>05</i>数据</h2>
+            <h2><i>06</i>数据</h2>
             <a class="btn ghost block" href="/api/export/transactions.csv">导出全部流水 CSV</a>
             <p class="hint">数据库文件：<code id="db-path">data/assetbook.db</code>。备份这个文件就等于备份全部账本。</p>
           </div>

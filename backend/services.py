@@ -10,6 +10,7 @@ import os
 from datetime import date, datetime, timedelta
 
 import db
+import quotes
 
 LIABILITY_KINDS = {"credit", "loan"}
 LIQUID_KINDS = {"cash", "bank", "payment"}
@@ -81,6 +82,8 @@ def holdings_with_value() -> list[dict]:
         d["profit"] = round(d["market_value"] - d["cost_value"], 2)
         d["profit_pct"] = round(d["profit"] / d["cost_value"] * 100, 2) if d["cost_value"] else 0.0
         d["kind_label"] = HOLDING_LABELS.get(d["kind"], d["kind"])
+        d["market"] = d.get("market") or "auto"
+        d["market_label"] = quotes.MARKETS.get(d["market"], d["market"])
         out.append(d)
     return out
 
@@ -419,3 +422,120 @@ def read_csv_rows(path: str) -> list[dict]:
         except (UnicodeDecodeError, LookupError):
             continue
     return []
+
+
+# ---------- 行情 / 汇率自动更新 ----------
+
+RATES_KEY = "rates_cache"
+
+
+def refresh_quotes(holding_ids: list[int] | None = None) -> dict:
+    """把所有填了代码的持仓现价刷一遍，写回数据库。
+
+    返回 {"total", "ok", "updated": [...], "failed": [{code, name, error}], "at"}
+    批量接口能一次拉多个沪深/港股标的；场外基金和加密货币逐个拉。
+    """
+    rows = db.q(
+        "SELECT id, code, name, kind, market FROM holdings "
+        "WHERE code IS NOT NULL AND TRIM(code) <> '' ORDER BY id"
+    )
+    if holding_ids:
+        wanted = set(holding_ids)
+        rows = [r for r in rows if r["id"] in wanted]
+
+    batch: list[tuple] = []       # (row, market) 可以走批量
+    singles: list = []            # 需要逐个试的
+    for r in rows:
+        m = (r["market"] or "auto").strip() or "auto"
+        if m in ("cn", "hk"):
+            batch.append((r, m))
+        elif m in ("fund", "crypto"):
+            singles.append(r)
+        else:                                          # auto：能归到批量就先归
+            guessed = quotes.guess_market(r["code"], r["kind"])
+            if guessed in ("cn", "hk"):
+                batch.append((r, guessed))
+            else:
+                singles.append(r)
+
+    hits: dict[int, dict] = {}
+    failed: list[dict] = []
+
+    if batch:
+        try:
+            got = quotes.fetch_market([(m, r["code"]) for r, m in batch])
+        except Exception as e:                          # noqa: BLE001
+            got = {}
+            failed.append({"code": "-", "name": "批量行情", "error": str(e)})
+        for r, _m in batch:
+            q = got.get(r["code"].strip().upper())
+            if q:
+                hits[r["id"]] = q
+                continue
+            # 批量没命中的 auto 持仓可能其实是场外基金，单独再试一次
+            if (r["market"] or "auto") == "auto":
+                try:
+                    hits[r["id"]] = quotes.fetch_one("auto", r["code"], r["kind"])
+                    continue
+                except Exception as e:                  # noqa: BLE001
+                    err = str(e)
+            else:
+                err = "查不到行情"
+            failed.append({"code": r["code"], "name": r["name"], "error": err})
+
+    for r in singles:
+        try:
+            hits[r["id"]] = quotes.fetch_one(r["market"] or "auto", r["code"], r["kind"])
+        except Exception as e:                          # noqa: BLE001
+            failed.append({"code": r["code"], "name": r["name"], "error": str(e)})
+
+    updated = []
+    if hits:
+        with db.tx() as conn:
+            for hid, q in hits.items():
+                conn.execute(
+                    "UPDATE holdings SET price = ?, price_date = ? WHERE id = ?",
+                    (q["price"], q["date"], hid),
+                )
+                updated.append({
+                    "id": hid,
+                    "price": q["price"],
+                    "date": q["date"],
+                    "market": q.get("market"),
+                    "name": q.get("name"),
+                })
+    return {
+        "total": len(rows),
+        "ok": len(hits),
+        "updated": updated,
+        "failed": failed,
+        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def refresh_rates() -> dict:
+    """拉最新汇率并存进 meta，返回 {"base","rates","date","updated"}"""
+    import json
+
+    info = quotes.fetch_rates("CNY")
+    info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db.set_meta(RATES_KEY, json.dumps(info, ensure_ascii=False))
+    return info
+
+
+def get_rates(auto_fetch: bool = True) -> dict:
+    """读缓存的汇率；没有缓存且 auto_fetch 时现拉一次。"""
+    import json
+
+    raw = db.get_meta(RATES_KEY)
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+    if auto_fetch:
+        try:
+            return refresh_rates()
+        except Exception:                               # noqa: BLE001
+            pass
+    return {"base": "CNY", "rates": {"CNY": 1.0}, "date": None, "updated": None}

@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS holdings (
   code       TEXT,
   name       TEXT NOT NULL,
   kind       TEXT NOT NULL DEFAULT 'fund',         -- fund/stock/bond/gold/cash/other
+  market     TEXT NOT NULL DEFAULT 'auto',         -- auto/cn/fund/hk/us/crypto
   account_id INTEGER,
   units      REAL NOT NULL DEFAULT 0,
   cost_price REAL NOT NULL DEFAULT 0,
@@ -176,9 +177,41 @@ def set_meta(key: str, value: str) -> None:
     )
 
 
+SCHEMA_VERSION = "2"
+
+# 老库升级用的补丁：列名 → 建表语句里的定义。加新列写这里就行。
+MIGRATIONS: list[tuple[str, str, str]] = [
+    ("holdings", "market", "TEXT NOT NULL DEFAULT 'auto'"),
+]
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    try:
+        return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return set()
+
+
+def _migrate(conn: sqlite3.Connection) -> list[str]:
+    """对老库补齐缺失的列，返回实际做了哪些改动（用于日志）。"""
+    done: list[str] = []
+    for table, column, ddl in MIGRATIONS:
+        if not _columns(conn, table):
+            continue                       # 表还不存在，建表语句里已经有了
+        if column in _columns(conn, table):
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        done.append(f"{table}.{column}")
+    return done
+
+
 def init_db() -> None:
-    """建表 + 首次运行灌入默认分类与规则。"""
+    """建表 + 升级老库 + 首次运行灌入默认分类与规则。"""
     conn = get_conn()
+    with tx() as c:
+        for change in _migrate(c):
+            print(f"[db] 已升级字段 {change}")
+
     if q1("SELECT COUNT(*) AS n FROM categories")["n"] == 0:
         with tx() as c:
             c.executemany(
@@ -190,7 +223,7 @@ def init_db() -> None:
                 "INSERT INTO rules (keyword, category_id, priority) VALUES (?, ?, 100)",
                 [(kw, cat[name]) for kw, name in DEFAULT_RULES if name in cat],
             )
-    set_meta("schema_version", "1")
+    set_meta("schema_version", SCHEMA_VERSION)
 
 
 def snapshot_networth() -> None:

@@ -41,9 +41,22 @@
 - 导出全部流水为 CSV
 
 **持仓**
-- 基金 / 股票 / 债券 / 黄金等，录入份额、成本价、现价
-- 自动算市值、盈亏额、盈亏比例
-- 一键更新现价
+- 基金 / 股票 / 债券 / 黄金等，录入份额、成本价即可
+- **自动更新现价**：填上代码就自动从公开行情接口拉最新价，也支持手改
+  - 沪深股票、场内基金 ETF/LOF、港股 → 腾讯行情（批量、无 Key）
+  - 场外基金（申购赎回那种）→ 东方财富历史净值
+  - 加密货币 → Binance 现货价
+  - 备源：东方财富
+- 自动算市值、盈亏额、盈亏比例，按品种画分布环图
+
+**自动同步（后台定时任务，默认开启）**
+- 每 30 分钟刷新一次持仓现价、每 12 小时拉一次汇率
+- 每天固定时间把当天的资产/负债/净值落进 `networth` 表，攒出长期曲线
+- 全部可以在「设置 → 自动同步」里改间隔、看运行状态和日志
+- 数据源都是公开接口，**不用注册、不用填 API Key**
+
+**汇率**
+- 账户可以填不同币种，汇率来自 open.er-api.com，定时刷新后统一折算成人民币口径
 
 **预算**
 - 按「月份 + 分类」设预算，看已花 / 剩余；月度横向条形对比
@@ -118,10 +131,21 @@ cd backend && ../.venv/bin/python -m uvicorn main:app --reload --port 8000
 | `ASSETBOOK_AI_KEY` | 上面对应的 API Key | 空 |
 | `ASSETBOOK_AI_MODEL` | 模型名，如 `deepseek-chat`、`gpt-4o-mini` | 空 |
 | `ASSETBOOK_CORS` | 允许跨域来源，逗号分隔 | `http://localhost:5173` |
+| `ASSETBOOK_AUTO_SYNC` | 自动同步总开关，`1` 开 `0` 关 | `1` |
+| `ASSETBOOK_QUOTE_INTERVAL_MIN` | 行情刷新间隔（分钟） | `30` |
+| `ASSETBOOK_SNAPSHOT_HOUR` | 每天几点记净值快照 | `23` |
+| `ASSETBOOK_RATES_INTERVAL_HOUR` | 汇率刷新间隔（小时） | `12` |
 | `TZ` | 时区 | `Asia/Shanghai` |
+
+> 上面四个自动同步参数在**数据库里有设置时以数据库为准**，
+> 也就是直接在「设置 → 自动同步」里改就行，不用动环境变量。
 
 **关于 AI 分类**：不配置也能用，本地关键词规则覆盖了常见商户。
 配置后，规则没命中的流水会再问一次模型，结果仍会落到你的分类表里，可随时手改。
+
+**关于行情数据源**：腾讯行情（`qt.gtimg.cn`）、东方财富（`push2.eastmoney.com`、`api.fund.eastmoney.com`）、
+Binance、open.er-api.com 都是公开接口。如果部署在境内服务器，这几个域名都要能出网；
+如果想加美股，`quotes.py` 里把 `105.` / `106.` 前缀的 secid 接回来即可。
 
 ---
 
@@ -170,14 +194,16 @@ server {
 assetbook/
 ├── backend/
 │   ├── main.py            # 应用入口：路由挂载、lifespan、静态托管
-│   ├── db.py              # SQLite 连接、建表、默认分类与规则、净值快照
+│   ├── db.py              # SQLite 连接、建表、字段迁移、默认分类与规则、净值快照
 │   ├── security.py        # 密码哈希、签名 Cookie、鉴权依赖
 │   ├── models.py          # Pydantic 请求模型
-│   ├── services.py        # 业务计算：余额、汇总、配置、报表、导入、分类
+│   ├── quotes.py          # 行情与汇率抓取（腾讯/东财/币安/er-api，零第三方依赖）
+│   ├── scheduler.py       # 后台自动同步：定时刷现价、拉汇率、记净值快照
+│   ├── services.py        # 业务计算：余额、汇总、配置、报表、导入、分类、行情写回
 │   ├── routes/
 │   │   ├── auth.py        # 登录 / 首次设密码 / 登出 / 状态
 │   │   ├── data.py        # 账户、分类、规则、流水、导入导出
-│   │   └── assets.py      # 总览、持仓、预算、净值、月度报表
+│   │   └── assets.py      # 总览、持仓、预算、净值、行情与自动同步
 │   └── static/            # 前端（原生 HTML/CSS/JS，无构建步骤）
 │       ├── index.html
 │       ├── app.css
@@ -209,9 +235,21 @@ assetbook/
 | `GET` `POST` | `/api/transactions` | 流水查询（支持 `q/type/account_id/category_id/month`）/ 新增 |
 | `POST` | `/api/transactions/import` | 导入账单 CSV（`dry_run=true` 先预览） |
 | `GET` | `/api/export/transactions.csv` | 导出流水 |
-| `GET` `POST` | `/api/holdings` · `/api/holdings/{id}/price` | 持仓 / 更新现价 |
+| `GET` `POST` | `/api/holdings` · `/api/holdings/{id}/price` | 持仓 / 更新现价（`price` 传 0 会自动去行情接口拉） |
+| `GET` `POST` | `/api/quotes/preview` · `/api/quotes/refresh` | 探一个代码的行情 / 手动刷全部持仓 |
+| `GET` `POST` | `/api/rates` · `/api/rates/refresh` | 当前汇率 / 手动刷新汇率 |
+| `GET` `PUT` | `/api/auto/status` · `/api/auto/settings` | 自动同步状态 / 修改设置 |
+| `POST` | `/api/auto/run/{quotes\|rates\|networth}` | 手动触发某项任务 |
 | `GET` `POST` | `/api/budgets` | 预算报表 / 设置预算 |
 | `GET` | `/api/reports/monthly` | 月度报表 |
+
+**行情怎么自己更新？** 启动时后台起一个 asyncio 任务，每 30 分钟（可改）调一次行情接口把
+所有填了代码的持仓现价刷掉，同时把当天净值落进 `networth` 表。API 文档里有
+`POST /api/quotes/refresh` 可以手动触发，比如想用系统 cron 自己控制节奏：
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" https://你的域名/api/quotes/refresh
+```
 
 ---
 

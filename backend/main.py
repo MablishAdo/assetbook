@@ -18,15 +18,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import db
+import scheduler
 from routes import assets, auth, data
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """启动时建表、写入版本、按环境变量预设密码，并记录当日净值快照。"""
+    """启动时建表、按环境变量预设密码、记录当日快照，并拉起后台自动同步。"""
     db.init_db()
     db.set_meta("app_version", APP_VERSION)
     preset = os.environ.get("ASSETBOOK_PASSWORD")
@@ -36,7 +37,11 @@ async def lifespan(_: FastAPI):
         if not security.has_password():
             security.set_password(preset)
     db.snapshot_networth()
-    yield
+    scheduler.scheduler.start()
+    try:
+        yield
+    finally:
+        await scheduler.scheduler.stop()
 
 
 app = FastAPI(

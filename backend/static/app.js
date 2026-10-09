@@ -15,6 +15,7 @@ const state = {
   categories: [],
   rules: [],
   overview: null,
+  meta: { markets: [], holding_kinds: {}, account_kinds: {} },
   nwRange: '30',
   tx: { page: 0, limit: 25, total: 0 },
   budgetMonth: new Date().toISOString().slice(0, 7),
@@ -107,15 +108,17 @@ async function enterApp() {
 }
 
 async function reloadAll() {
-  const [accounts, categories, rules] = await Promise.all([
-    api('/api/accounts'), api('/api/categories'), api('/api/rules'),
+  const [accounts, categories, rules, meta] = await Promise.all([
+    api('/api/accounts'), api('/api/categories'), api('/api/rules'), api('/api/meta'),
   ]);
   state.accounts = accounts.items;
   state.categories = categories.items;
   state.rules = rules.items;
+  state.meta = meta;
   fillAccountSelects();
   fillCategorySelect();
   await loadOverview();
+  refreshSyncNote();
 }
 
 /* ---------------- 路由 ---------------- */
@@ -137,9 +140,9 @@ function go(view) {
   if (location.hash !== '#/' + view) location.hash = '#/' + view;
   if (view === 'overview') loadOverview().then(renderOverview);
   if (view === 'transactions') loadTransactions();
-  if (view === 'holdings') loadHoldings();
+  if (view === 'holdings') { loadHoldings(); refreshSyncNote(); }
   if (view === 'budgets') renderBudgets();
-  if (view === 'settings') renderSettings();
+  if (view === 'settings') { renderSettings(); renderAutoPanel(); }
 }
 
 /* ---------------- 概览 ---------------- */
@@ -367,7 +370,8 @@ async function loadHoldings() {
 
   $('#holding-body').innerHTML = data.items.length ? data.items.map((h) => `
     <tr>
-      <td data-label="名称">${esc(h.name)}${h.code ? ` <span class="muted">${esc(h.code)}</span>` : ''}</td>
+      <td data-label="名称">${esc(h.name)}${h.code ? ` <span class="muted">${esc(h.code)}</span>` : ''}
+        ${h.market && h.market !== 'auto' ? `<span class="tag tiny-tag">${esc(h.market_label || h.market)}</span>` : ''}</td>
       <td data-label="类型"><span class="tag">${esc(h.kind_label)}</span></td>
       <td data-label="份额" class="num">${h.units}</td>
       <td data-label="成本价" class="num">${h.cost_price}</td>
@@ -387,29 +391,68 @@ async function loadHoldings() {
 }
 
 function openHoldingForm() {
+  const marketOpts = (state.meta.markets || [{ value: 'auto', label: '自动识别' }])
+    .map((m) => `<option value="${m.value}">${esc(m.label)}</option>`).join('');
+  const kindOpts = Object.entries(state.meta.holding_kinds || {
+    fund: '基金', stock: '股票', bond: '债券', gold: '黄金', cash: '现金类', other: '其他',
+  }).map(([v, label]) => `<option value="${v}">${esc(label)}</option>`).join('');
+
   openModal('新增持仓', `
     <div class="modal-cols">
-      <label class="field"><span>名称</span><input class="input" id="h-name" placeholder="沪深300ETF"></label>
-      <label class="field"><span>代码（可选）</span><input class="input" id="h-code" placeholder="510300"></label>
-      <label class="field"><span>类型</span><select class="input" id="h-kind">
-        <option value="fund">基金</option><option value="stock">股票</option>
-        <option value="bond">债券</option><option value="gold">黄金</option>
-        <option value="cash">现金类</option><option value="other">其他</option>
-      </select></label>
+      <label class="field"><span>代码</span><input class="input" id="h-code" placeholder="510300 / 00700 / BTC"></label>
+      <label class="field"><span>市场</span><select class="input" id="h-market">${marketOpts}</select></label>
+      <label class="field"><span>名称</span><input class="input" id="h-name" placeholder="填代码可自动带出"></label>
+      <label class="field"><span>类型</span><select class="input" id="h-kind">${kindOpts}</select></label>
       <label class="field"><span>份额</span><input class="input" type="number" step="0.0001" id="h-units" value="0"></label>
       <label class="field"><span>成本价</span><input class="input" type="number" step="0.0001" id="h-cost" value="0"></label>
       <label class="field"><span>现价</span><input class="input" type="number" step="0.0001" id="h-price" value="0"></label>
     </div>
+    <p class="hint" id="h-probe">填好代码后会试拉一次行情，成功就自动填名称和现价。</p>
     <button class="btn primary block" id="h-save">保存</button>
   `, () => {
+    const probe = $('#h-probe');
+    let probed = false;
+
+    const tryProbe = async () => {
+      const code = $('#h-code').value.trim();
+      if (!code || probed) return;
+      probed = true;
+      probe.className = 'hint';
+      probe.textContent = '正在查行情…';
+      try {
+        const q = await api(`/api/quotes/preview?code=${encodeURIComponent(code)}`
+          + `&market=${encodeURIComponent($('#h-market').value)}`
+          + `&kind=${encodeURIComponent($('#h-kind').value)}`);
+        if (q.ok) {
+          if (!$('#h-name').value.trim() && q.name) $('#h-name').value = q.name;
+          $('#h-price').value = q.price;
+          probe.className = 'hint pos';
+          probe.textContent = `已查到：${q.name || code} · ${q.price}（${q.date}）`;
+        } else {
+          probe.className = 'hint neg';
+          probe.textContent = `没查到：${q.error}。可以换个市场选项，或直接手填现价。`;
+        }
+      } catch (err) {
+        probe.className = 'hint neg';
+        probe.textContent = '查询失败：' + err.message;
+      }
+    };
+
+    $('#h-code').addEventListener('blur', tryProbe);
+    $('#h-market').addEventListener('change', () => { probed = false; tryProbe(); });
+    $('#h-kind').addEventListener('change', () => { probed = false; tryProbe(); });
+
     $('#h-save').addEventListener('click', async () => {
+      const name = $('#h-name').value.trim() || $('#h-code').value.trim();
+      if (!name) return toast('名称或代码至少填一个', true);
       try {
         await api('/api/holdings', {
           method: 'POST',
           body: {
-            name: $('#h-name').value.trim(),
+            name,
             code: $('#h-code').value.trim() || null,
             kind: $('#h-kind').value,
+            market: $('#h-market').value,
             units: parseFloat($('#h-units').value) || 0,
             cost_price: parseFloat($('#h-cost').value) || 0,
             price: parseFloat($('#h-price').value) || 0,
@@ -419,6 +462,7 @@ function openHoldingForm() {
         closeModal();
         await loadHoldings();
         await loadOverview();
+        refreshSyncNote();
       } catch (err) { toast(err.message, true); }
     });
   });
@@ -430,6 +474,93 @@ async function savePrice(id, price) {
     toast('价格已更新');
     await loadHoldings();
     await loadOverview();
+  } catch (err) { toast(err.message, true); }
+}
+
+/* ---------------- 自动同步 ---------------- */
+
+async function refreshSyncNote() {
+  try {
+    const s = await api('/api/auto/status');
+    const el = $('#sync-note');
+    if (!el) return;
+    el.textContent = s.last_quote_at
+      ? `${s.enabled ? '自动更新' : '已暂停'} · 上次 ${s.last_quote_at.slice(5, 16)}`
+      : (s.enabled ? '自动更新已开启' : '自动更新已关闭');
+    el.classList.toggle('is-off', !s.enabled);
+    state.auto = s;
+  } catch (err) { /* 忽略 */ }
+}
+
+async function refreshQuotes() {
+  const btn = $('#refresh-quotes');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '刷新中…';
+  try {
+    const r = await api('/api/quotes/refresh', { method: 'POST' });
+    if (r.total === 0) {
+      toast('没有填代码的持仓，没什么可刷的');
+    } else if (r.failed && r.failed.length) {
+      toast(`成功 ${r.ok}/${r.total}，${r.failed.length} 条没查到`, true);
+    } else {
+      toast(`已更新 ${r.ok} 条持仓价格`);
+    }
+    await loadHoldings();
+    await loadOverview();
+    await refreshSyncNote();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function renderAutoPanel() {
+  let s;
+  try {
+    s = await api('/api/auto/status');
+  } catch (err) { return; }
+  state.auto = s;
+
+  $('#auto-enabled').checked = !!s.enabled;
+  $('#auto-interval').value = s.quote_interval_min;
+  $('#auto-hour').value = s.snapshot_hour;
+  $('#auto-rates').value = s.rates_interval_hour;
+
+  const lr = s.last_quote_result;
+  const rows = [
+    ['运行状态', s.running ? '后台任务在跑' : '未启动'],
+    ['上次刷新行情', s.last_quote_at || '还没跑过'],
+    ['下次刷新行情', s.enabled ? (s.next_quote_at || '待定') : '已暂停'],
+    ['上次刷新汇率', s.last_rates_at || '还没跑过'],
+    ['最近净值快照', s.last_snapshot_date || '还没记'],
+    ['上次结果', lr ? `成功 ${lr.ok}/${lr.total}${lr.failed && lr.failed.length ? ` · 失败 ${lr.failed.length}` : ''}` : '—'],
+  ];
+  $('#auto-status').innerHTML = rows.map(([k, v]) =>
+    `<div class="auto-row"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('');
+
+  $('#auto-log').innerHTML = (s.log || []).length
+    ? `<div class="auto-log-title">最近动态</div>` + s.log.slice(0, 8).map((l) =>
+        `<div class="auto-log-item ${l.level}"><span class="t">${esc(l.at.slice(5, 16))}</span>${esc(l.message)}</div>`).join('')
+    : '';
+}
+
+async function saveAutoSettings() {
+  try {
+    await api('/api/auto/settings', {
+      method: 'PUT',
+      body: {
+        enabled: $('#auto-enabled').checked,
+        quote_interval_min: parseInt($('#auto-interval').value, 10) || 30,
+        snapshot_hour: parseInt($('#auto-hour').value, 10) || 0,
+        rates_interval_hour: parseInt($('#auto-rates').value, 10) || 12,
+      },
+    });
+    toast('设置已保存');
+    await renderAutoPanel();
+    refreshSyncNote();
   } catch (err) { toast(err.message, true); }
 }
 
@@ -805,6 +936,25 @@ function bind() {
       toast('密码已更新，请重新登录');
       setTimeout(() => location.reload(), 900);
     } catch (err) { toast(err.message, true); }
+  });
+
+  // 行情刷新
+  $('#refresh-quotes').addEventListener('click', refreshQuotes);
+
+  // 自动同步
+  $('#auto-save').addEventListener('click', saveAutoSettings);
+  $('#auto-run-quotes').addEventListener('click', async () => {
+    const btn = $('#auto-run-quotes');
+    btn.disabled = true;
+    btn.textContent = '刷新中…';
+    try {
+      const r = await api('/api/auto/run/quotes', { method: 'POST' });
+      toast(r.failed && r.failed.length ? `成功 ${r.ok}/${r.total}，${r.failed.length} 条失败` : `已更新 ${r.ok} 条`);
+      await renderAutoPanel();
+    } catch (err) { toast(err.message, true); } finally {
+      btn.disabled = false;
+      btn.textContent = '立即刷新行情';
+    }
   });
 
   // 模态
