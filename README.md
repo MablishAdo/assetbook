@@ -62,9 +62,10 @@
 
 **预算**
 - 按「月份 + 分类」设预算，看已花 / 剩余；月度横向条形对比
-- 自带的「月花 1000」一键配置：部署完跑 `python3 setup-1000.py 你的密码`，会自动建好
-  6 个账户（邮政储蓄 / 工商银行 / 中国银行 / 微信零钱 / 支付宝 / 房贷欠款）、
-  7 项分类预算（合计 1000）、一个不占预算的「房贷」分类、24 条常用分类规则和账单映射规则，可重复跑
+- 自带的「月花 1000」一键配置：会自动建好 6 个账户（邮政储蓄 / 工商银行 / 中国银行 / 微信零钱 /
+  支付宝 / 房贷欠款）、7 项分类预算（合计 1000）、一个不占预算的「房贷」分类、24 条常用分类规则和账单映射规则。
+  Docker 部署：`docker compose exec assetbook python /app/setup-1000.py`；
+  本机跑：`python3 setup-1000.py 你的密码`。脚本零依赖、可重复跑
 
 **设置**
 - 账户管理（现金 / 银行卡 / 支付账户 / 券商 / 信用卡 / 贷款）+ 余额校准
@@ -83,22 +84,33 @@
 ### 方式一：Docker Compose（推荐）
 
 ```bash
-git clone https://github.com/<你的用户名>/assetbook.git
+git clone https://github.com/MablishAdo/assetbook.git
 cd assetbook
-cp .env.example .env        # 改掉里面的 ASSETBOOK_PASSWORD
+cp .env.example .env        # 改掉 ASSETBOOK_PASSWORD；想换端口改 ASSETBOOK_PORT
 docker compose up -d --build
 ```
 
-打开 <http://localhost:8000>，用 `.env` 里设的密码登录。
+打开 <http://localhost:8000>（服务器上就是 `http://服务器IP:8000`），用 `.env` 里设的密码登录。
+装在自己电脑上、想换端口，改 `.env` 里的 `ASSETBOOK_PORT` 即可；装在服务器上记得**安全组 / 防火墙放行这个端口**，
+长期挂公网建议前面套 Nginx 并开 HTTPS（见下面的[反向代理](#反向代理想挂公网--域名)）。
 
 数据存在具名卷 `assetbook-data` 里，`docker compose down` 不会丢，`docker compose down -v` 才会清空。
+
+想一键配好账户和「月花 1000」的预算（可选，见[预算](#预算)一节）：
+
+```bash
+docker compose exec assetbook python /app/setup-1000.py            # 密码自动取容器里的 ASSETBOOK_PASSWORD
+docker compose exec assetbook python /app/setup-1000.py 你的密码   # 已经在界面改过密码就显式传
+```
+
+这个脚本是通过服务自己的 HTTP 接口写数据的，所以**容器要先起来**；可以重复跑，不会重复建。
 
 常用命令：
 
 ```bash
 docker compose logs -f        # 看日志
 docker compose down           # 停掉
-docker compose up -d --build  # 改完代码重新构建
+docker compose up -d --build  # 改完代码 / git pull 之后重新构建
 ```
 
 ### 方式二：Docker 单条命令
@@ -179,6 +191,7 @@ docker cp ~/Downloads/微信支付账单.csv assetbook:/data/inbox/
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
+| `ASSETBOOK_PORT` | 只给 docker compose 用：服务映射到宿主机的端口 | `8000` |
 | `ASSETBOOK_PASSWORD` | 首次启动时自动设置登录密码；之后改密码请在「设置」里改 | 空（首次访问时在界面设置） |
 | `ASSETBOOK_SECRET` | 会话签名密钥。留空则随机生成并存进数据库 | 自动生成 |
 | `DATA_DIR` | SQLite 数据文件所在目录 | `backend/../data`，Docker 里是 `/data` |

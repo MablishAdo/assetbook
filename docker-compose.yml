@@ -1,28 +1,49 @@
+# AssetBook · 一条命令起服务
+#
+#   cp .env.example .env        # 至少改掉 ASSETBOOK_PASSWORD；想换端口改 ASSETBOOK_PORT
+#   docker compose up -d --build
+#   docker compose exec assetbook python /app/setup-1000.py    # 可选：一键配好「月花 1000」
+#
+# 常用：
+#   docker compose logs -f        看日志
+#   docker compose down           停掉（账本数据在卷里，不会丢）
+#   docker compose down -v        停掉并删卷（会清空账本，慎用）
+#
+# 下面每个 ${变量:-默认值} 都会被同目录的 .env 覆盖；全部可配项见 .env.example。
+
 services:
   assetbook:
     build: .
     image: assetbook:latest
     container_name: assetbook
     restart: unless-stopped
+
     ports:
-      # 左边是你机器上的端口，想换就改这里，比如 "9000:8000"
-      - "8000:8000"
+      # 左边是宿主机端口，用 .env 里的 ASSETBOOK_PORT 控制（比如改成 9000:8000）。
+      # 只想自己用 / 前面挂 Nginx，就改成 "127.0.0.1:${ASSETBOOK_PORT:-8000}:8000"，别对公网裸奔。
+      - "${ASSETBOOK_PORT:-8000}:8000"
+
     environment:
+      # ── 基础 ────────────────────────────────────────────────
       # 首次启动自动设置登录密码（之后改密码在界面「设置」里改）
       ASSETBOOK_PASSWORD: ${ASSETBOOK_PASSWORD:-}
       # 会话签名密钥；不填也会自动生成并存在数据库里。
       # 若填了固定值，请务必改成一串随机字符，且别提交到 git。
       ASSETBOOK_SECRET: ${ASSETBOOK_SECRET:-}
-      # 可选：接入 OpenAI 兼容接口做「AI 智能分类」
+      TZ: ${TZ:-Asia/Shanghai}
+
+      # ── 可选：接入 OpenAI 兼容接口做「AI 智能分类」──────────
       ASSETBOOK_AI_BASE: ${ASSETBOOK_AI_BASE:-}
       ASSETBOOK_AI_KEY: ${ASSETBOOK_AI_KEY:-}
       ASSETBOOK_AI_MODEL: ${ASSETBOOK_AI_MODEL:-}
-      # 自动同步：定时刷新持仓现价、汇率、记净值快照（详见 .env.example）
+
+      # ── 自动同步（持仓现价 / 汇率 / 净值快照）───────────────
       ASSETBOOK_AUTO_SYNC: ${ASSETBOOK_AUTO_SYNC:-1}
       ASSETBOOK_QUOTE_INTERVAL_MIN: ${ASSETBOOK_QUOTE_INTERVAL_MIN:-30}
       ASSETBOOK_SNAPSHOT_HOUR: ${ASSETBOOK_SNAPSHOT_HOUR:-23}
       ASSETBOOK_RATES_INTERVAL_HOUR: ${ASSETBOOK_RATES_INTERVAL_HOUR:-12}
-      # 账单自动收取：收件目录 + IMAP 邮箱（详见 .env.example）
+
+      # ── 账单自动收取（收件目录 + IMAP 邮箱）─────────────────
       ASSETBOOK_INBOX: ${ASSETBOOK_INBOX:-}
       ASSETBOOK_INBOX_ACCOUNT: ${ASSETBOOK_INBOX_ACCOUNT:-}
       ASSETBOOK_INBOX_INTERVAL_MIN: ${ASSETBOOK_INBOX_INTERVAL_MIN:-10}
@@ -35,10 +56,19 @@ services:
       ASSETBOOK_IMAP_FROM: ${ASSETBOOK_IMAP_FROM:-}
       ASSETBOOK_WECHAT_ZIP_PASSWORD: ${ASSETBOOK_WECHAT_ZIP_PASSWORD:-}
       ASSETBOOK_MAIL_INTERVAL_MIN: ${ASSETBOOK_MAIL_INTERVAL_MIN:-60}
-      TZ: Asia/Shanghai
+
     volumes:
-      # 账本数据（assetbook.db）就存在这个具名卷里，容器删了也不会丢
+      # 账本数据（assetbook.db 及 WAL）存在具名卷里，容器删了也不丢。
+      # 想直接看到文件、方便 rsync / 网盘整目录备份，就换成下面那行（先 mkdir -p data）：
+      #   - ./data:/data
       - assetbook-data:/data
+
+    # 日志别无限涨：单个文件 10M，最多留 3 个
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   assetbook-data:

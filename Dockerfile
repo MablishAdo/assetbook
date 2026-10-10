@@ -17,6 +17,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 再拷后端与静态前端
 COPY backend ./backend
 
+# 「月花 1000」一键配置脚本（零依赖，用标准库）
+# 部署后可以直接在容器里跑：docker compose exec assetbook python /app/setup-1000.py
+COPY setup-1000.py ./
+
 # 数据目录（sqlite 文件 + WAL）用卷持久化，容器重建不丢账
 RUN mkdir -p /data
 VOLUME ["/data"]
