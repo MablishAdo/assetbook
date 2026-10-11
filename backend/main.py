@@ -12,7 +12,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -76,7 +76,17 @@ def healthz():
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    """index.html 动态注入版本号做缓存穿透。
+
+    页面里静态资源都带 `?v=版本号`，每次发版 URL 就变了，浏览器自然重新拉，
+    不会再出现「页面是新的、脚本是旧的」导致按钮点不动的情况。
+    """
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return Response(
+        content=html.replace("__ASSETBOOK_VERSION__", APP_VERSION),
+        media_type="text/html; charset=utf-8",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
