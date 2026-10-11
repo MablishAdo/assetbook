@@ -38,6 +38,10 @@ services:
       ASSETBOOK_AI_KEY: ${ASSETBOOK_AI_KEY:-}
       ASSETBOOK_AI_MODEL: ${ASSETBOOK_AI_MODEL:-}
 
+      # ── 可选：TypeSafe Jev（决策模型），自动分类的快通道 ──
+      JEV_API_KEY: ${JEV_API_KEY:-}
+      JEV_MODEL: ${JEV_MODEL:-jev-latest}
+
       # ── 自动同步（持仓现价 / 汇率 / 净值快照）───────────────
       ASSETBOOK_AUTO_SYNC: ${ASSETBOOK_AUTO_SYNC:-1}
       ASSETBOOK_QUOTE_INTERVAL_MIN: ${ASSETBOOK_QUOTE_INTERVAL_MIN:-30}

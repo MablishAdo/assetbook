@@ -389,6 +389,34 @@
               本地 Ollama <code>http://localhost:11434/v1</code> + <code>qwen2.5</code>（Key 随便填）。<br>
               分析发出去的是汇总数字：账户名、分类名、金额、持仓名。不发备注原文，也不发单笔流水明细。
             </p>
+
+            <div class="ai-sub">
+              <div class="ai-sub-head">
+                <b>Jev 快通道</b>
+                <span class="tag" id="jev-cfg-state">未配置</span>
+              </div>
+              <p class="hint">
+                TypeSafe 的决策模型，专管「从这几个分类里选一个」这种判断：不生成文字、直接回结构化的选择结果，
+                比对话模型快得多、也稳得多，一次调用成本约 0.00003 美元（输出免费）。<br>
+                <b>只要配了 Key，记一笔时的自动分类就会优先走这条路</b>；没配就照旧，不影响任何功能。
+              </p>
+              <label class="field">
+                <span>模型</span>
+                <input class="input" id="jev-model" placeholder="jev-latest">
+              </label>
+              <div class="ai-key-row">
+                <label class="field">
+                  <span>Jev API Key</span>
+                  <input class="input" type="password" id="jev-key" autocomplete="off" placeholder="apikey_...">
+                </label>
+                <button class="btn ghost" id="jev-key-clear" type="button" hidden>清除 Key</button>
+              </div>
+              <div class="btn-row">
+                <button class="btn primary" id="jev-save" type="button">保存 Jev 配置</button>
+                <button class="btn ghost" id="jev-test" type="button">测试连接</button>
+              </div>
+              <span class="hint" id="jev-test-out"></span>
+            </div>
           </div>
 
           <div class="panel">

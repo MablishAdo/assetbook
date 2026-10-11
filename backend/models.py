@@ -119,6 +119,14 @@ class AiSettingsIn(BaseModel):
     clear_key: bool = False
 
 
+class JevSettingsIn(BaseModel):
+    """Jev（TypeSafe System One 决策模型）配置。key 留空表示「不改动已保存的」。"""
+    model: Optional[str] = Field(default=None, max_length=80,
+                                 description="默认 jev-latest")
+    key: Optional[str] = Field(default=None, max_length=300)
+    clear_key: bool = False
+
+
 class AnalyzeIn(BaseModel):
     """生成 AI 财务分析。"""
     month: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}$")

@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta
 
 import ai
 import db
+import jev
 import quotes
 
 LIABILITY_KINDS = {"credit", "loan"}
@@ -280,8 +282,64 @@ def classify_by_rules(note: str) -> int | None:
     return None
 
 
+# Jev 分类缓存：同一段备注不重复问；连续失败就停一会儿，别让记账卡在网络里
+_jev_cache: dict[str, int | None] = {}
+_jev_block_until = 0.0
+JEV_FAIL_COOLDOWN = 120        # 失败后停用多久（秒）
+JEV_TIMEOUT = 8                # 单次调用超时
+
+
+def reset_jev_state() -> None:
+    """配置变了就清掉分类缓存和熔断状态 —— 换了新 Key 应该立刻生效，
+    不该被上一把 Key 留下的「停用 120 秒」拖住。"""
+    global _jev_block_until
+    _jev_block_until = 0.0
+    _jev_cache.clear()
+
+
+def jev_classify(note: str, tx_type: str) -> int | None:
+    """用 Jev 的 choice 原语选分类 —— 比对话模型快、稳、几乎免费。
+
+    没配 Jev、连不上、超时，一律只返回 None，绝不抛异常打扰记账。
+    """
+    global _jev_block_until
+    if not note or not jev.configured():
+        return None
+    if time.monotonic() < _jev_block_until:
+        return None
+
+    cache_key = f"{tx_type}:{note}"
+    if cache_key in _jev_cache:
+        return _jev_cache[cache_key]
+
+    cats = db.q("SELECT id, name FROM categories WHERE kind = ?",
+                ("income" if tx_type == "in" else "expense",))
+    if not cats:
+        return None
+
+    what = "收入" if tx_type == "in" else "支出"
+    criteria = {c["name"]: f"备注反映的{what}属于「{c['name']}」" for c in cats}
+    try:
+        res = jev.choose(
+            state=f"一笔{what}的记账备注：{note}",
+            instructions=f"这笔{what}最该归到哪个记账分类",
+            criteria=criteria,
+            timeout=JEV_TIMEOUT,
+        )
+    except jev.JevError:
+        _jev_block_until = time.monotonic() + JEV_FAIL_COOLDOWN
+        return None
+
+    picked = (res.get("choice") or "").strip()
+    cid = next((c["id"] for c in cats if c["name"] == picked), None)
+    if cid is None:                       # 名字没完全对上时退一步做包含匹配
+        cid = next((c["id"] for c in cats if picked and picked in c["name"]), None)
+    _jev_cache[cache_key] = cid
+    return cid
+
+
 def ai_classify(note: str, tx_type: str) -> int | None:
-    """可选的 AI 兜底分类：配置了 OpenAI 兼容接口才会生效，否则返回 None。
+    """可选的对话模型兜底分类：配置了 OpenAI 兼容接口才会生效，否则返回 None。
 
     配置来自 ai.config()：数据库里的「设置 → AI 分析」优先，其次环境变量
     ASSETBOOK_AI_BASE / KEY / MODEL。
@@ -289,7 +347,7 @@ def ai_classify(note: str, tx_type: str) -> int | None:
     if not note or not ai.configured():
         return None
     cats = db.q("SELECT id, name FROM categories WHERE kind = ?",
-                ("income" if tx_type == "in" else "expense"))
+                ("income" if tx_type == "in" else "expense",))
     if not cats:
         return None
     names = [c["name"] for c in cats]
@@ -309,9 +367,18 @@ def ai_classify(note: str, tx_type: str) -> int | None:
 
 
 def classify(note: str, tx_type: str, use_ai: bool = False) -> tuple[int | None, str]:
+    """分类链路：本地规则 → Jev 快通道 → 对话模型兜底。
+
+    Jev 只要在设置里配了 Key 就自动生效（决策模型，快且几乎免费）；
+    对话模型要显式传 use_ai 才调，避免每一次记账都等一次慢请求。
+    返回值第二项标明是谁定的：rule / jev / ai / none。
+    """
     cid = classify_by_rules(note)
     if cid:
         return cid, "rule"
+    cid = jev_classify(note, tx_type)
+    if cid:
+        return cid, "jev"
     if use_ai:
         cid = ai_classify(note, tx_type)
         if cid:

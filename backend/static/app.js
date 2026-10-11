@@ -1131,6 +1131,52 @@ async function renderAiSettings() {
     ? (s.source === 'env' ? '已配置（来自环境变量）' : '已配置')
     : '未配置';
   tag.className = 'tag' + (s.configured ? '' : ' warn-tag');
+
+  renderJevSettings(s.jev || {});
+}
+
+function renderJevSettings(j) {
+  $('#jev-model').value = j.model || 'jev-latest';
+  const keyEl = $('#jev-key');
+  keyEl.value = '';
+  keyEl.placeholder = j.key_set ? `已保存 ${j.key_hint}，留空就不改` : 'apikey_...';
+  $('#jev-key-clear').hidden = !j.key_set;
+
+  const tag = $('#jev-cfg-state');
+  tag.textContent = j.configured
+    ? (j.source === 'env' ? '已配置（来自环境变量）' : '已配置')
+    : '未配置';
+  tag.className = 'tag' + (j.configured ? '' : ' warn-tag');
+}
+
+async function saveJevSettings() {
+  try {
+    await api('/api/ai/jev', {
+      method: 'PUT',
+      body: { model: $('#jev-model').value.trim(), key: $('#jev-key').value.trim() },
+    });
+    $('#jev-test-out').textContent = '';
+    toast('Jev 配置已保存');
+    await renderAiSettings();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function testJev() {
+  const btn = $('#jev-test'), out = $('#jev-test-out');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '测试中…';
+  out.textContent = '';
+  try {
+    const r = await api('/api/ai/jev/test', { method: 'POST' });
+    out.textContent = `连接正常（${r.model}）：示例备注归到了「${r.choice}」，置信度 ${r.confidence}`;
+    toast('Jev 连接正常');
+  } catch (err) {
+    out.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
 }
 
 async function saveAiSettings() {
@@ -1391,6 +1437,17 @@ function bind() {
   $('#rule-add').addEventListener('click', openRuleForm);
   $('#category-add').addEventListener('click', openCategoryForm);
   $('#ai-save').addEventListener('click', saveAiSettings);
+  $('#jev-save').addEventListener('click', saveJevSettings);
+  $('#jev-test').addEventListener('click', testJev);
+  $('#jev-key-clear').addEventListener('click', async () => {
+    if (!confirm('清除已保存的 Jev Key？清掉之后自动分类会退回本地规则。')) return;
+    try {
+      await api('/api/ai/jev', { method: 'PUT', body: { clear_key: true } });
+      $('#jev-test-out').textContent = '';
+      toast('Jev Key 已清除');
+      await renderAiSettings();
+    } catch (err) { toast(err.message, true); }
+  });
   $('#ai-key-clear').addEventListener('click', async () => {
     if (!confirm('清除已保存的 API Key？清掉之后 AI 分类和分析都会停用。')) return;
     try {

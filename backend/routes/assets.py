@@ -7,12 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 import ai
 import db
 import insights
+import jev
 import quotes
 import scheduler as sched
 import security
 import services as svc
 from models import (AiSettingsIn, AnalyzeIn, AutoSyncIn, BudgetIn, HoldingIn,
-                    HoldingPatch, PriceIn)
+                    HoldingPatch, JevSettingsIn, PriceIn)
 
 router = APIRouter(prefix="/api", tags=["assets"], dependencies=[Depends(security.require_auth)])
 
@@ -199,6 +200,7 @@ def ai_settings():
     """当前 AI 配置（不含明文 key），以及这个月有没有现成的分析。"""
     return {
         **ai.public(),
+        "jev": jev.public(),
         "insight": insights.cached(),
     }
 
@@ -232,6 +234,39 @@ def ai_analyze(payload: AnalyzeIn):
 def ai_snapshot(month: str | None = None):
     """给模型看的那份数据包长什么样 —— 方便自查分析是不是基于真实数字。"""
     return insights.snapshot(month)
+
+
+# ---------- Jev 快通道（决策模型，负责自动分类这类判断） ----------
+
+@router.get("/ai/jev")
+def jev_settings():
+    return jev.public()
+
+
+@router.put("/ai/jev")
+def jev_settings_save(payload: JevSettingsIn):
+    data = payload.model_dump()
+    try:
+        out = jev.save(
+            model=data.get("model"),
+            key=data.get("key"),
+            clear_key=bool(data.get("clear_key")),
+        )
+    except Exception as e:  # 写库失败
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"保存失败：{e}") from e
+    svc.reset_jev_state()      # 换 Key / 换模型后立刻生效，别被旧的失败状态拖住
+    return out
+
+
+@router.post("/ai/jev/test")
+def jev_test():
+    """拿一句示例备注真跑一次往返，验证 Key、地址和链路。"""
+    try:
+        return jev.sample()
+    except jev.JevError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"测试失败：{e}") from e
 
 
 # ---------- 预算 ----------

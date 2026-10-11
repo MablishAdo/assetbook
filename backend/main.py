@@ -21,7 +21,7 @@ import db
 import scheduler
 from routes import assets, auth, data
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 

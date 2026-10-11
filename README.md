@@ -37,7 +37,9 @@
 
 **记账**
 - 三态流水：收入 / 支出 / **转账**（转账自动同时改动两个账户，不重复计收支）
-- 记一笔时按备注**自动分类**：先匹配本地关键词规则（内置 24 条，如 `麦当劳→餐饮`），规则不中再走可选 AI
+- 记一笔时按备注**自动分类**，三级链路：本地关键词规则（内置 24 条，如 `麦当劳→餐饮`）→
+  **Jev 快通道**（配了 Key 就自动生效，决策模型，一次约 0.00003 美元）→ 对话模型兜底（要显式开启），
+  详见下面的 [Jev 快通道](#jev-快通道记一笔时自动分类)
 - 流水搜索 + 月份 / 类型 / 账户筛选 + 分页
 - **导入账单**：支持支付宝 / 微信支付 / 银行流水 / 通用 CSV（自动识别来源与编码，微信加密 zip 直接传），
   先预览再确认入库，重复单号自动跳过；详见下面的[账单自动导入](#账单自动导入支付宝--微信--银行)
@@ -74,6 +76,8 @@
 - 分类管理、关键词规则管理
 - **AI 配置**：填一次 OpenAI 兼容接口的地址 / 模型 / Key，「AI 兜底分类」和「AI 财务分析」就都通了，
   不用再碰环境变量
+- **Jev 配置**：同一个面板里另有一块「Jev 快通道」，填 TypeSafe 的 Key 即可（带「测试连接」按钮），
+  配好后自动分类优先走它 —— 更快、更稳、更便宜
 - 改登录密码、导出流水、查看数据库路径
 
 **安全**
@@ -203,6 +207,10 @@ docker cp ~/Downloads/微信支付账单.csv assetbook:/data/inbox/
 | `ASSETBOOK_AI_BASE` | OpenAI 兼容接口 base URL（AI 兜底分类 + AI 财务分析）。**建议直接在「设置 → AI 分析」里配，不用环境变量** | 空（关闭） |
 | `ASSETBOOK_AI_KEY` | 上面对应的 API Key | 空 |
 | `ASSETBOOK_AI_MODEL` | 模型名，如 `deepseek-chat`、`gpt-4o-mini` | `gpt-4o-mini` |
+| `JEV_API_KEY` | TypeSafe Jev 的 Key（快通道分类）。**建议直接在「设置 → AI 分析 → Jev 快通道」里配** | 空（关闭） |
+| `TYPESAFE_API_KEY` | 同上，官方文档里的名字，两个都认；`JEV_API_KEY` 优先 | 空 |
+| `JEV_MODEL` | Jev 模型名 | `jev-latest` |
+| `JEV_BASE` | Jev 接口地址（一般不用改，自建代理时才用） | `https://api.typesafe.ai` |
 | `ASSETBOOK_CORS` | 允许跨域来源，逗号分隔 | `http://localhost:5173` |
 | `ASSETBOOK_AUTO_SYNC` | 自动同步总开关，`1` 开 `0` 关 | `1` |
 | `ASSETBOOK_QUOTE_INTERVAL_MIN` | 行情刷新间隔（分钟） | `30` |
@@ -225,6 +233,8 @@ docker cp ~/Downloads/微信支付账单.csv assetbook:/data/inbox/
 **关于 AI（分类与分析）**：不配置也能用，本地关键词规则覆盖了常见商户。
 配置后有两个能力：① 规则没命中的流水会再问一次模型，结果仍落到你的分类表里，可随时手改；
 ② 概览页多出一块「AI 财务分析」。见下一节。
+
+**关于 Jev（快通道分类）**：另一条独立的路，配不配都不影响上面两个能力。见 [Jev 快通道](#jev-快通道记一笔时自动分类)。
 
 **关于行情数据源**：腾讯行情（`qt.gtimg.cn`）、东方财富（`push2.eastmoney.com`、`api.fund.eastmoney.com`）、
 Binance、open.er-api.com 都是公开接口。如果部署在境内服务器，这几个域名都要能出网；
@@ -258,6 +268,37 @@ Binance、open.er-api.com 都是公开接口。如果部署在境内服务器，
 | 本地 Ollama | `http://localhost:11434/v1` | `qwen2.5`（Key 随便填） |
 
 没配时记一笔照常工作（只走本地规则），只是没有 AI 兜底和分析面板。
+
+---
+
+## Jev 快通道（记一笔时自动分类）
+
+[Jev](https://typesafe.ai) 是 TypeSafe 的 **System One 决策模型**，跟「聊天模型」是两回事：
+它不生成文字，只按你给的选项/评分标准回**结构化字段**，代码拿到就能直接分支。
+官网 <https://typesafe.ai>，文档 <https://docs.typesafe.ai>，控制台 <https://console.typesafe.ai>。
+
+**为什么给记账用它**：自动分类本质就是「从这 15 个分类里挑一个」——正是 Jev 的强项。
+比起让对话模型生成一句话再拿字符串去匹配，走 Jev 是**直接拿到选中的分类名**，不用解析自然语言，
+而且更快、更稳定。计费上输入 $0.042/M、**输出免费**，一次分类大约 $0.00003。
+
+**怎么配**：`设置 → AI 分析 → Jev 快通道`，填 Key（形如 `apikey_...`），点「测试连接」验证。
+模型默认 `jev-latest`，一般不用改。Key 在 <https://console.typesafe.ai> 里生成。
+
+**配好之后会发生什么**：
+
+| 顺序 | 谁来判断 | 什么时候生效 |
+| --- | --- | --- |
+| 1 | 本地关键词规则 | 永远，命中最快 |
+| 2 | **Jev** | 配了 Key 就自动生效 |
+| 3 | 对话模型 | 只在显式要求时才用（避免每次记账都等一次慢请求） |
+
+同时有两条保险，保证它不会拖累记账：
+
+- **结果缓存**：同一段备注 + 同一种收支方向，只问一次
+- **失败熔断**：连不上或 Key 失效时，静默退回「未分类」（不会报错、不会阻断记账），
+  并停用 120 秒；**你在设置里重新保存一次配置就会立刻解冻**，不用重启服务
+
+不想用了就点「清除 Key」，链路立刻退回本地规则，账本数据不受影响。
 
 ---
 
@@ -311,12 +352,13 @@ assetbook/
 │   ├── models.py          # Pydantic 请求模型
 │   ├── quotes.py          # 行情与汇率抓取（腾讯/东财/币安/er-api，零第三方依赖）
 │   ├── ai.py              # AI 接入：配置读写（界面优先）、OpenAI 兼容对话调用
+│   ├── jev.py             # Jev（TypeSafe System One）决策模型：noul / choice / score
 │   ├── insights.py        # AI 财务分析：账本快照、提示词、生成与按月缓存
 │   ├── parsers.py         # 账单解析：支付宝 / 微信 / 银行 / 通用 CSV + zip 解密
 │   ├── importer.py        # 导入引擎：去重、支付方式映射账户、批次撤销
 │   ├── intake.py          # 自动收取：收件目录扫描 + IMAP 邮箱附件
 │   ├── scheduler.py       # 后台自动同步：定时刷现价、拉汇率、记净值快照、收账单
-│   ├── services.py        # 业务计算：余额、汇总、配置、报表、导入、分类、行情写回
+│   ├── services.py        # 业务计算：余额、汇总、配置、报表、导入、分类（规则→Jev→AI）、行情写回
 │   ├── routes/
 │   │   ├── auth.py        # 登录 / 首次设密码 / 登出 / 状态
 │   │   ├── data.py        # 账户、分类、规则、流水、导入导出
@@ -365,9 +407,12 @@ assetbook/
 | `POST` | `/api/auto/run/{quotes\|rates\|networth\|inbox\|mail}` | 手动触发某项任务 |
 | `GET` `POST` | `/api/budgets` | 预算报表 / 设置预算 |
 | `GET` | `/api/reports/monthly` | 月度报表 |
-| `GET` `PUT` | `/api/ai/settings` | AI 配置读取（key 只回末 4 位）/ 保存 |
+| `GET` `PUT` | `/api/ai/settings` | AI 配置读取（key 只回末 4 位）/ 保存；响应里带 `jev` 块 |
 | `POST` | `/api/ai/analyze` | 生成 AI 财务分析（`force=true` 强制重跑） |
 | `GET` | `/api/ai/snapshot` | 给模型看的那份数据包，用来核对分析基于的数字 |
+| `GET` `PUT` | `/api/ai/jev` | Jev 快通道配置读取 / 保存（`clear_key=true` 清 Key） |
+| `POST` | `/api/ai/jev/test` | 拿一句示例备注真跑一次，验证 Key 与链路 |
+| `POST` | `/api/classify` | 试一下某段备注会归到哪个分类，`by` 告诉你是谁定的（`rule`/`jev`/`ai`/`none`） |
 
 **行情怎么自己更新？** 启动时后台起一个 asyncio 任务，每 30 分钟（可改）调一次行情接口把
 所有填了代码的持仓现价刷掉，同时把当天净值落进 `networth` 表。API 文档里有

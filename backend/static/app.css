@@ -594,6 +594,21 @@ code { font: 12px/1.4 var(--mono); background: var(--accent-soft); padding: 1px 
 .ai-key-row .field { flex: 1 1 auto; min-width: 0; }
 .ai-key-row .btn { flex: none; margin-bottom: 1px; }
 
+/* Jev 快通道：AI 分析面板里的子块 */
+.ai-sub {
+  margin-top: 22px; padding-top: 18px;
+  border-top: 1px dashed var(--line);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.ai-sub-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ai-sub-head b { font-family: var(--serif); font-size: 15px; letter-spacing: .01em; }
+.ai-sub .hint { margin: 0; }
+.ai-sub .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ai-sub .btn-row .btn { flex: 0 1 auto; }
+.ai-sub #jev-test-out { min-height: 16px; }
+
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
 @media print {
   .side, .topbar-actions, .toast, .modal { display: none !important; }
   .shell { grid-template-columns: minmax(0, 1fr); }
