@@ -256,6 +256,8 @@ function txFilterParams() {
 async function loadTransactions() {
   const data = await api('/api/transactions?' + txFilterParams().toString());
   state.tx.total = data.total;
+  state.tx.byId = {};
+  data.items.forEach((t) => { state.tx.byId[t.id] = t; });
   $('#tx-body').innerHTML = data.items.length ? data.items.map((t) => `
     <tr>
       <td data-label="日期" class="muted">${t.date}</td>
@@ -264,7 +266,7 @@ async function loadTransactions() {
       <td data-label="分类">${t.category_name ? `<span class="tag">${esc(t.category_name)}</span>` : '<span class="muted">未分类</span>'}</td>
       <td data-label="金额" class="num ${t.type === 'in' ? 'pos' : t.type === 'out' ? 'neg' : ''}">${t.type === 'in' ? '+' : t.type === 'out' ? '−' : ''}${fmt(t.amount)}</td>
       <td data-label="备注" class="muted">${esc(t.note || '')}</td>
-      <td data-label=""><div class="row-actions"><button class="btn tiny danger" data-del="${t.id}">删除</button></div></td>
+      <td data-label=""><div class="row-actions"><button class="btn tiny" data-edit="${t.id}">编辑</button><button class="btn tiny danger" data-del="${t.id}">删除</button></div></td>
     </tr>`).join('') : '<tr><td colspan="7"><div class="empty">没有符合条件的记录</div></td></tr>';
 
   $('#f-count').textContent = `${data.total} 笔 · 收入 ${fmt0(data.sum_in)} · 支出 ${fmt0(data.sum_out)}`;
@@ -298,6 +300,62 @@ async function submitTx(e) {
     await loadTransactions();
     await reloadRulesIfNeeded();
   } catch (err) { toast(err.message, true); }
+}
+
+function accOptions(sel) {
+  return state.accounts.map((a) =>
+    `<option value="${a.id}"${Number(sel) === a.id ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
+}
+
+function catOptions(sel) {
+  const opt = (c) => `<option value="${c.id}"${Number(sel) === c.id ? ' selected' : ''}>${esc(c.name)}</option>`;
+  return '<option value="">自动分类</option>'
+    + '<optgroup label="支出">' + state.categories.filter((c) => c.kind === 'expense').map(opt).join('') + '</optgroup>'
+    + '<optgroup label="收入">' + state.categories.filter((c) => c.kind === 'income').map(opt).join('') + '</optgroup>';
+}
+
+// 编辑一条流水：预填原值，保存走 PATCH（后端按整条覆盖）
+function openTxEdit(t) {
+  if (!t) return;
+  const typeOpt = (v, label) => `<option value="${v}"${t.type === v ? ' selected' : ''}>${label}</option>`;
+  openModal('编辑流水', `
+    <div class="modal-cols">
+      <label class="field"><span>日期</span><input class="input" id="e-date" type="date" value="${t.date}"></label>
+      <label class="field"><span>类型</span><select class="input" id="e-type">
+        ${typeOpt('out', '支出')}${typeOpt('in', '收入')}${typeOpt('transfer', '转账')}</select></label>
+      <label class="field"><span>金额</span><input class="input" type="number" step="0.01" min="0.01" id="e-amount" value="${t.amount}"></label>
+      <label class="field"><span>账户</span><select class="input" id="e-account">${accOptions(t.account_id)}</select></label>
+      <label class="field" id="e-to-wrap" ${t.type === 'transfer' ? '' : 'hidden'}><span>转入账户</span><select class="input" id="e-to">${accOptions(t.to_account_id || '')}</select></label>
+      <label class="field"><span>分类</span><select class="input" id="e-cat">${catOptions(t.category_id)}</select></label>
+    </div>
+    <label class="field"><span>备注</span><input class="input" id="e-note" value="${esc(t.note || '')}"></label>
+    <button class="btn primary block" id="e-save">保存修改</button>
+  `, () => {
+    $('#e-type').addEventListener('change', (ev) => {
+      $('#e-to-wrap').hidden = ev.target.value !== 'transfer';
+    });
+    $('#e-save').addEventListener('click', async () => {
+      const type = $('#e-type').value;
+      const body = {
+        date: $('#e-date').value,
+        type,
+        amount: parseFloat($('#e-amount').value),
+        account_id: parseInt($('#e-account').value, 10),
+        note: $('#e-note').value || '',
+        autocategorize: !$('#e-cat').value,
+      };
+      if (body.type === 'transfer') body.to_account_id = parseInt($('#e-to').value, 10);
+      if ($('#e-cat').value) body.category_id = parseInt($('#e-cat').value, 10);
+      if (!body.date || !(body.amount > 0) || !body.account_id) return toast('日期、金额、账户都要填', true);
+      try {
+        await api('/api/transactions/' + t.id, { method: 'PATCH', body });
+        toast('已修改');
+        closeModal();
+        await loadOverview();
+        await loadTransactions();
+      } catch (err) { toast(err.message, true); }
+    });
+  });
 }
 
 async function reloadRulesIfNeeded() { /* 规则不常变，占位便于扩展 */ }
@@ -623,6 +681,8 @@ async function loadHoldings() {
   ].map((k) => `<div class="stat"><div class="stat-label">${k.label}</div>
       <div class="stat-val ${k.cls || ''}">${k.val}</div><div class="stat-sub">${esc(k.sub)}</div></div>`).join('');
 
+  state.holdById = {};
+  data.items.forEach((h) => { state.holdById[h.id] = h; });
   $('#holding-body').innerHTML = data.items.length ? data.items.map((h) => `
     <tr>
       <td data-label="名称">${esc(h.name)}${h.code ? ` <span class="muted">${esc(h.code)}</span>` : ''}
@@ -633,7 +693,7 @@ async function loadHoldings() {
       <td data-label="现价" class="num"><input class="input price-input" type="number" step="0.0001" value="${h.price}" data-price="${h.id}"></td>
       <td data-label="市值" class="num">${fmt(h.market_value)}</td>
       <td data-label="盈亏" class="num ${cls(h.profit)}">${fmt(h.profit)}<br><span class="muted" style="font-size:11px">${h.profit_pct.toFixed(2)}%</span></td>
-      <td data-label=""><div class="row-actions"><button class="btn tiny danger" data-del-holding="${h.id}">删除</button></div></td>
+      <td data-label=""><div class="row-actions"><button class="btn tiny" data-edit-holding="${h.id}">编辑</button><button class="btn tiny danger" data-del-holding="${h.id}">删除</button></div></td>
     </tr>`).join('') : '<tr><td colspan="8"><div class="empty">还没有持仓，点右上角新增</div></td></tr>';
 
   const byKind = {};
@@ -714,6 +774,53 @@ function openHoldingForm() {
           },
         });
         toast('已添加');
+        closeModal();
+        await loadHoldings();
+        await loadOverview();
+        refreshSyncNote();
+      } catch (err) { toast(err.message, true); }
+    });
+  });
+}
+
+// 编辑一个持仓：买卖后直接把份额改成新持有量；成本价可按需调整
+function openHoldingEdit(h) {
+  if (!h) return;
+  const marketOpts = (state.meta.markets || [{ value: 'auto', label: '自动识别' }])
+    .map((m) => `<option value="${m.value}"${h.market === m.value ? ' selected' : ''}>${esc(m.label)}</option>`).join('');
+  const kindOpts = Object.entries(state.meta.holding_kinds || {
+    fund: '基金', stock: '股票', bond: '债券', gold: '黄金', cash: '现金类', other: '其他',
+  }).map(([v, label]) => `<option value="${v}"${h.kind === v ? ' selected' : ''}>${esc(label)}</option>`).join('');
+  openModal(`编辑持仓 · ${esc(h.name)}`, `
+    <div class="modal-cols">
+      <label class="field"><span>代码</span><input class="input" id="eh-code" value="${esc(h.code || '')}"></label>
+      <label class="field"><span>名称</span><input class="input" id="eh-name" value="${esc(h.name)}"></label>
+      <label class="field"><span>类型</span><select class="input" id="eh-kind">${kindOpts}</select></label>
+      <label class="field"><span>市场</span><select class="input" id="eh-market">${marketOpts}</select></label>
+      <label class="field"><span>份额</span><input class="input" type="number" step="0.0001" id="eh-units" value="${h.units}"></label>
+      <label class="field"><span>成本价</span><input class="input" type="number" step="0.0001" id="eh-cost" value="${h.cost_price}"></label>
+      <label class="field"><span>现价</span><input class="input" type="number" step="0.0001" id="eh-price" value="${h.price}"></label>
+    </div>
+    <p class="hint" style="margin-top:0">交易之后把份额改成新的持有量即可；改成本价，盈亏按新成本算。</p>
+    <button class="btn primary block" id="eh-save">保存修改</button>
+  `, () => {
+    $('#eh-save').addEventListener('click', async () => {
+      const name = $('#eh-name').value.trim() || $('#eh-code').value.trim();
+      if (!name) return toast('名称或代码至少填一个', true);
+      try {
+        await api('/api/holdings/' + h.id, {
+          method: 'PATCH',
+          body: {
+            name,
+            code: $('#eh-code').value.trim(),
+            kind: $('#eh-kind').value,
+            market: $('#eh-market').value,
+            units: parseFloat($('#eh-units').value) || 0,
+            cost_price: parseFloat($('#eh-cost').value) || 0,
+            price: parseFloat($('#eh-price').value) || 0,
+          },
+        });
+        toast('已修改');
         closeModal();
         await loadHoldings();
         await loadOverview();
@@ -1120,6 +1227,8 @@ function bind() {
   $('#page-prev').addEventListener('click', () => { if (state.tx.page > 0) { state.tx.page--; loadTransactions(); } });
   $('#page-next').addEventListener('click', () => { state.tx.page++; loadTransactions(); });
   $('#tx-body').addEventListener('click', async (e) => {
+    const eid = e.target.dataset.edit;
+    if (eid) { openTxEdit(state.tx.byId[eid]); return; }
     const id = e.target.dataset.del;
     if (!id) return;
     if (!confirm('删掉这条流水？')) return;
@@ -1136,6 +1245,8 @@ function bind() {
     if (id) savePrice(id, parseFloat(e.target.value) || 0);
   });
   $('#holding-body').addEventListener('click', async (e) => {
+    const hid = e.target.dataset.editHolding;
+    if (hid) { openHoldingEdit(state.holdById[hid]); return; }
     const id = e.target.dataset.delHolding;
     if (!id) return;
     if (!confirm('删除这个持仓？')) return;
