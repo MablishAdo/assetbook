@@ -32,7 +32,8 @@ services:
       ASSETBOOK_SECRET: ${ASSETBOOK_SECRET:-}
       TZ: ${TZ:-Asia/Shanghai}
 
-      # ── 可选：接入 OpenAI 兼容接口做「AI 智能分类」──────────
+      # ── 可选：OpenAI 兼容接口，用于 AI 兜底分类 + AI 财务分析 ──
+      # （网页「设置 → AI 分析」里填的优先，这里只是兜底）
       ASSETBOOK_AI_BASE: ${ASSETBOOK_AI_BASE:-}
       ASSETBOOK_AI_KEY: ${ASSETBOOK_AI_KEY:-}
       ASSETBOOK_AI_MODEL: ${ASSETBOOK_AI_MODEL:-}

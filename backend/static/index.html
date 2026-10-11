@@ -90,11 +90,22 @@
         <div class="stats" id="ov-kpis"></div>
       </div>
 
+      <div class="panel">
+        <div class="panel-head">
+          <h2><i>01</i>AI 财务分析</h2>
+          <div class="head-actions">
+            <span class="ai-when" id="ai-when"></span>
+            <button class="btn primary" id="ai-run" type="button">生成分析</button>
+          </div>
+        </div>
+        <div id="ai-body" class="ai-body"></div>
+      </div>
+
       <div class="cols">
         <div class="col-main">
           <div class="panel">
             <div class="panel-head">
-              <h2><i>01</i>净值走势</h2>
+              <h2><i>02</i>净值走势</h2>
               <div class="seg" id="nw-range">
                 <button class="seg-btn is-on" data-range="30">30 天</button>
                 <button class="seg-btn" data-range="12">12 个月</button>
@@ -107,14 +118,14 @@
           </div>
 
           <div class="panel">
-            <h2><i>02</i>本月支出 · 分类</h2>
+            <h2><i>03</i>本月支出 · 分类</h2>
             <div id="ov-cats" class="cat-bars"></div>
           </div>
         </div>
 
         <div class="col-side">
           <div class="panel">
-            <h2><i>03</i>资产配置</h2>
+            <h2><i>04</i>资产配置</h2>
             <div class="donut-row">
               <svg id="alloc-donut" viewBox="0 0 200 200"></svg>
               <div class="legend" id="alloc-legend"></div>
@@ -122,12 +133,12 @@
           </div>
 
           <div class="panel">
-            <h2><i>04</i>账户</h2>
+            <h2><i>05</i>账户</h2>
             <div id="ov-accounts" class="acct-list"></div>
           </div>
 
           <div class="panel">
-            <h2><i>05</i>最近流水</h2>
+            <h2><i>06</i>最近流水</h2>
             <div id="ov-recent" class="mini-list"></div>
           </div>
         </div>
@@ -175,7 +186,7 @@
           </label>
           <button class="btn primary" type="submit">保存</button>
         </form>
-        <p class="hint">备注先过「分类规则」，命中就自动归类；设置里可以加规则，也可以配 AI 兜底。</p>
+        <p class="hint">备注先过「分类规则」，命中就自动归类；设置里可以加规则，也可以在「设置 → AI 分析」里配好接口让模型兜底。</p>
       </div>
 
       <div class="panel">
@@ -346,25 +357,61 @@
 
           <div class="panel">
             <div class="panel-head">
-              <h2><i>03</i>自动分类规则</h2>
+              <h2><i>03</i>AI 分析</h2>
+              <span class="tag" id="ai-cfg-state">未配置</span>
+            </div>
+
+            <div class="auto-form">
+              <label class="field">
+                <span>接口地址（OpenAI 兼容，填到 /v1 这一层）</span>
+                <input class="input" id="ai-base" placeholder="https://api.deepseek.com/v1">
+              </label>
+              <label class="field">
+                <span>模型</span>
+                <input class="input" id="ai-model" placeholder="deepseek-chat">
+              </label>
+            </div>
+
+            <div class="ai-key-row">
+              <label class="field">
+                <span>API Key</span>
+                <input class="input" type="password" id="ai-key" autocomplete="off" placeholder="粘贴你的 API Key">
+              </label>
+              <button class="btn ghost" id="ai-key-clear" type="button" hidden>清除 Key</button>
+            </div>
+
+            <button class="btn primary block" id="ai-save" type="button">保存 AI 配置</button>
+
+            <p class="hint">
+              填一次，两处都能用：① 记一笔时规则没命中的备注会再问一次模型；② 概览页的「AI 财务分析」。<br>
+              常用搭配：DeepSeek <code>https://api.deepseek.com/v1</code> + <code>deepseek-chat</code>；
+              OpenAI <code>https://api.openai.com/v1</code> + <code>gpt-4o-mini</code>；
+              本地 Ollama <code>http://localhost:11434/v1</code> + <code>qwen2.5</code>（Key 随便填）。<br>
+              分析发出去的是汇总数字：账户名、分类名、金额、持仓名。不发备注原文，也不发单笔流水明细。
+            </p>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2><i>04</i>自动分类规则</h2>
               <button class="btn primary" id="rule-add" type="button">新增规则</button>
             </div>
             <div class="rule-grid" id="rule-list"></div>
-            <p class="hint">备注里包含关键词就归到对应分类，按优先级从上往下匹配。想要 AI 兜底，在容器环境变量里配上 ASSETBOOK_AI_BASE / KEY / MODEL。</p>
+            <p class="hint">备注里包含关键词就归到对应分类，按优先级从上往下匹配。都没命中时，上面「AI 分析」里配好了接口就让模型兜底。</p>
           </div>
         </div>
 
         <div class="col-side">
           <div class="panel">
             <div class="panel-head">
-              <h2><i>04</i>分类</h2>
+              <h2><i>05</i>分类</h2>
               <button class="btn primary" id="category-add" type="button">新增</button>
             </div>
             <div id="category-list" class="chip-list"></div>
           </div>
 
           <div class="panel">
-            <h2><i>05</i>安全</h2>
+            <h2><i>06</i>安全</h2>
             <form id="password-form">
               <label class="field">
                 <span>新密码</span>
@@ -376,7 +423,7 @@
           </div>
 
           <div class="panel">
-            <h2><i>06</i>数据</h2>
+            <h2><i>07</i>数据</h2>
             <a class="btn ghost block" href="/api/export/transactions.csv">导出全部流水 CSV</a>
             <p class="hint">数据库文件：<code id="db-path">data/assetbook.db</code>。备份这个文件就等于备份全部账本。</p>
           </div>

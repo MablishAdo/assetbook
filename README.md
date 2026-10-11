@@ -29,6 +29,8 @@
 
 **总览**
 - 净资产 / 总资产 / 总负债 / 投资市值 四个数一览
+- **AI 财务分析**：把账本汇总数字交给模型，换回一段说人话的点评（钱花哪了、风险提醒、下个月怎么做），
+  详见下面的 [AI 财务分析](#ai-财务分析)
 - 12 个月净值走势折线图（悬停显示每月净值）
 - 资产配置环形图（账户按类型聚合 + 持仓按品种聚合）
 - 本月分类支出排行、最近流水
@@ -70,6 +72,8 @@
 **设置**
 - 账户管理（现金 / 银行卡 / 支付账户 / 券商 / 信用卡 / 贷款）+ 余额校准
 - 分类管理、关键词规则管理
+- **AI 配置**：填一次 OpenAI 兼容接口的地址 / 模型 / Key，「AI 兜底分类」和「AI 财务分析」就都通了，
+  不用再碰环境变量
 - 改登录密码、导出流水、查看数据库路径
 
 **安全**
@@ -196,9 +200,9 @@ docker cp ~/Downloads/微信支付账单.csv assetbook:/data/inbox/
 | `ASSETBOOK_SECRET` | 会话签名密钥。留空则随机生成并存进数据库 | 自动生成 |
 | `DATA_DIR` | SQLite 数据文件所在目录 | `backend/../data`，Docker 里是 `/data` |
 | `ASSETBOOK_DB` | 直接指定数据库文件完整路径（优先级高于 `DATA_DIR`） | `$DATA_DIR/assetbook.db` |
-| `ASSETBOOK_AI_BASE` | OpenAI 兼容接口的 base URL，用于 AI 智能分类 | 空（关闭） |
+| `ASSETBOOK_AI_BASE` | OpenAI 兼容接口 base URL（AI 兜底分类 + AI 财务分析）。**建议直接在「设置 → AI 分析」里配，不用环境变量** | 空（关闭） |
 | `ASSETBOOK_AI_KEY` | 上面对应的 API Key | 空 |
-| `ASSETBOOK_AI_MODEL` | 模型名，如 `deepseek-chat`、`gpt-4o-mini` | 空 |
+| `ASSETBOOK_AI_MODEL` | 模型名，如 `deepseek-chat`、`gpt-4o-mini` | `gpt-4o-mini` |
 | `ASSETBOOK_CORS` | 允许跨域来源，逗号分隔 | `http://localhost:5173` |
 | `ASSETBOOK_AUTO_SYNC` | 自动同步总开关，`1` 开 `0` 关 | `1` |
 | `ASSETBOOK_QUOTE_INTERVAL_MIN` | 行情刷新间隔（分钟） | `30` |
@@ -216,13 +220,44 @@ docker cp ~/Downloads/微信支付账单.csv assetbook:/data/inbox/
 
 > 上面这些自动同步参数在**数据库里有设置时以数据库为准**，
 > 也就是直接在「设置 → 自动同步」里改就行，不用动环境变量。
+> AI 的三个变量同理：**「设置 → AI 分析」里填的优先**，环境变量只是兜底。
 
-**关于 AI 分类**：不配置也能用，本地关键词规则覆盖了常见商户。
-配置后，规则没命中的流水会再问一次模型，结果仍会落到你的分类表里，可随时手改。
+**关于 AI（分类与分析）**：不配置也能用，本地关键词规则覆盖了常见商户。
+配置后有两个能力：① 规则没命中的流水会再问一次模型，结果仍落到你的分类表里，可随时手改；
+② 概览页多出一块「AI 财务分析」。见下一节。
 
 **关于行情数据源**：腾讯行情（`qt.gtimg.cn`）、东方财富（`push2.eastmoney.com`、`api.fund.eastmoney.com`）、
 Binance、open.er-api.com 都是公开接口。如果部署在境内服务器，这几个域名都要能出网；
 如果想加美股，`quotes.py` 里把 `105.` / `106.` 前缀的 secid 接回来即可。
+
+---
+
+## AI 财务分析
+
+概览页第一块就是。点「生成分析」，它会把账本压成一份**汇总数据包**交给模型，
+换回四段内容：**一句话总结 / 钱花在哪了 / 风险提醒 / 接下来做什么**。
+
+**发出去的是什么**：只有汇总数字 —— 净资产、资产负债、本月收支、分类占比、
+预算执行情况、持仓市值与盈亏、近几个月趋势，外加账户名 / 分类名 / 持仓名。
+**不发**流水备注原文，也不发单笔流水明细。想亲眼确认的话，
+`GET /api/ai/snapshot` 就是给模型看的那份东西。
+
+**怎么省钱**：
+
+- 同一个月份的结果缓存在数据库里，反复点不会反复烧 token
+- 账本有新流水后，旧分析会被标成「数字有点旧，建议重新生成」，但**不会**自动重跑 —— 花钱的事你来点头
+- 数据包控制在 2K 字符以内，一次分析通常几千 token
+
+**配置**：`设置 → AI 分析`，填 OpenAI 兼容的接口地址（到 `/v1` 这一层）、模型名、Key。
+常见的搭配：
+
+| 服务 | 接口地址 | 模型 |
+| --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| 本地 Ollama | `http://localhost:11434/v1` | `qwen2.5`（Key 随便填） |
+
+没配时记一笔照常工作（只走本地规则），只是没有 AI 兜底和分析面板。
 
 ---
 
@@ -275,6 +310,8 @@ assetbook/
 │   ├── security.py        # 密码哈希、签名 Cookie、鉴权依赖
 │   ├── models.py          # Pydantic 请求模型
 │   ├── quotes.py          # 行情与汇率抓取（腾讯/东财/币安/er-api，零第三方依赖）
+│   ├── ai.py              # AI 接入：配置读写（界面优先）、OpenAI 兼容对话调用
+│   ├── insights.py        # AI 财务分析：账本快照、提示词、生成与按月缓存
 │   ├── parsers.py         # 账单解析：支付宝 / 微信 / 银行 / 通用 CSV + zip 解密
 │   ├── importer.py        # 导入引擎：去重、支付方式映射账户、批次撤销
 │   ├── intake.py          # 自动收取：收件目录扫描 + IMAP 邮箱附件
@@ -328,6 +365,9 @@ assetbook/
 | `POST` | `/api/auto/run/{quotes\|rates\|networth\|inbox\|mail}` | 手动触发某项任务 |
 | `GET` `POST` | `/api/budgets` | 预算报表 / 设置预算 |
 | `GET` | `/api/reports/monthly` | 月度报表 |
+| `GET` `PUT` | `/api/ai/settings` | AI 配置读取（key 只回末 4 位）/ 保存 |
+| `POST` | `/api/ai/analyze` | 生成 AI 财务分析（`force=true` 强制重跑） |
+| `GET` | `/api/ai/snapshot` | 给模型看的那份数据包，用来核对分析基于的数字 |
 
 **行情怎么自己更新？** 启动时后台起一个 asyncio 任务，每 30 分钟（可改）调一次行情接口把
 所有填了代码的持仓现价刷掉，同时把当天净值落进 `networth` 表。API 文档里有

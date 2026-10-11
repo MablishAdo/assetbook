@@ -110,6 +110,21 @@ class PayeeRuleIn(BaseModel):
     source: Optional[Literal["alipay", "wechat", "bank", "generic"]] = None
 
 
+class AiSettingsIn(BaseModel):
+    """AI 接口配置。key 留空表示「不改动已保存的」。"""
+    base: Optional[str] = Field(default=None, max_length=300,
+                                description="OpenAI 兼容接口地址，填到 /v1 这一层")
+    key: Optional[str] = Field(default=None, max_length=300)
+    model: Optional[str] = Field(default=None, max_length=80)
+    clear_key: bool = False
+
+
+class AnalyzeIn(BaseModel):
+    """生成 AI 财务分析。"""
+    month: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+    force: bool = False
+
+
 class ImportRow(BaseModel):
     """用户在预览界面上确认过的行。"""
     date: str

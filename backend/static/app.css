@@ -564,6 +564,36 @@ code { font: 12px/1.4 var(--mono); background: var(--accent-soft); padding: 1px 
 .imp-batch-name { font-family: var(--mono); font-size: 11px; }
 .imp-batch .muted { color: var(--muted); }
 
+/* ---------------- AI 分析 ---------------- */
+
+.ai-when { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ai-body { min-height: 44px; }
+
+.ai-md { font-size: 14px; line-height: 1.85; color: var(--ink); }
+.ai-md p { margin: 0 0 10px; }
+.ai-md p:last-child { margin-bottom: 0; }
+.ai-md .ai-h {
+  font-family: var(--serif); font-size: 15px; font-weight: 700; letter-spacing: .01em;
+  color: var(--accent); margin: 20px 0 8px;
+}
+.ai-md .ai-h:first-child { margin-top: 0; }
+.ai-md .ai-ul { margin: 0 0 12px; padding-left: 20px; }
+.ai-md .ai-ul li { margin-bottom: 5px; }
+.ai-md code {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--accent-soft); padding: 1px 5px; border-radius: 4px;
+}
+.ai-md strong { font-weight: 700; }
+
+.ai-stale {
+  margin-bottom: 14px; padding: 9px 12px; font-size: 12px; line-height: 1.6;
+  border: 1px solid var(--amber); border-radius: var(--radius-sm); color: var(--amber);
+}
+
+.ai-key-row { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; }
+.ai-key-row .field { flex: 1 1 auto; min-width: 0; }
+.ai-key-row .btn { flex: none; margin-bottom: 1px; }
+
 @media print {
   .side, .topbar-actions, .toast, .modal { display: none !important; }
   .shell { grid-template-columns: minmax(0, 1fr); }

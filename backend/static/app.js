@@ -146,7 +146,7 @@ function go(view) {
   if (view === 'transactions') loadTransactions();
   if (view === 'holdings') { loadHoldings(); refreshSyncNote(); }
   if (view === 'budgets') renderBudgets();
-  if (view === 'settings') { renderSettings(); renderAutoPanel(); }
+  if (view === 'settings') { renderSettings(); renderAutoPanel(); renderAiSettings(); }
 }
 
 /* ---------------- 概览 ---------------- */
@@ -198,6 +198,7 @@ function renderOverview() {
     </div>`).join('') : '<div class="empty">还没有账户</div>';
 
   loadRecent();
+  loadAiPanel();
 }
 
 async function loadRecent() {
@@ -211,6 +212,95 @@ async function loadRecent() {
           ${t.type === 'out' ? '−' : t.type === 'in' ? '+' : '⇄'}${fmt0(t.amount)}</span>
       </div>`).join('') : '<div class="empty">还没有流水</div>';
   } catch (err) { /* 忽略 */ }
+}
+
+/* ---------------- AI 财务分析 ---------------- */
+
+// 极简 Markdown → HTML：模型固定输出「## 小标题 + 段落 + 列表」，够用就行
+function aiMdToHtml(md) {
+  const inline = (t) => esc(t)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+?)`/g, '<code>$1</code>');
+  const out = [];
+  let inList = false;
+  const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+
+  String(md || '').split('\n').forEach((raw) => {
+    const line = raw.trim();
+    if (!line) return closeList();
+    const h = line.match(/^#{1,6}\s+(.*)$/);
+    const li = line.match(/^(?:[-*]|\d+[.、])\s+(.*)$/);
+    if (h) {
+      closeList();
+      out.push(`<div class="ai-h">${inline(h[1])}</div>`);
+    } else if (li) {
+      if (!inList) { out.push('<ul class="ai-ul">'); inList = true; }
+      out.push(`<li>${inline(li[1])}</li>`);
+    } else {
+      closeList();
+      out.push(`<p>${inline(line)}</p>`);
+    }
+  });
+  closeList();
+  return out.join('');
+}
+
+async function loadAiPanel() {
+  const box = $('#ai-body');
+  if (!box) return;
+  try {
+    const s = await api('/api/ai/settings');
+    state.ai = s;
+    renderAiBody(s);
+  } catch (err) { /* 忽略，别影响概览其他部分 */ }
+}
+
+function renderAiBody(s) {
+  const box = $('#ai-body');
+  const when = $('#ai-when');
+  const btn = $('#ai-run');
+  if (!box) return;
+
+  if (!s || !s.configured) {
+    when.textContent = '';
+    btn.hidden = true;
+    box.innerHTML = '<div class="empty">还没配 AI 接口。去「设置 → AI 分析」填上接口地址、模型和 Key，回来就能生成。</div>';
+    return;
+  }
+
+  btn.hidden = false;
+  const ins = s.insight;
+  btn.textContent = ins ? '重新生成' : '生成分析';
+
+  if (!ins) {
+    when.textContent = '';
+    box.innerHTML = '<div class="empty">还没有分析。点右上角「生成分析」，我读一遍你的账本，给出一段人话点评。</div>';
+    return;
+  }
+
+  const tokens = ins.usage && ins.usage.total_tokens ? ` · ${ins.usage.total_tokens} tokens` : '';
+  when.textContent = `${(ins.at || '').replace('T', ' ').slice(0, 16)} · ${ins.model || ''}${tokens}`;
+  const stale = ins.stale
+    ? '<div class="ai-stale">生成之后账本又有了新流水，这份分析的数字有点旧，建议重新生成一次。</div>'
+    : '';
+  box.innerHTML = `${stale}<div class="ai-md">${aiMdToHtml(ins.content)}</div>`;
+}
+
+async function runAiAnalyze(force) {
+  const btn = $('#ai-run');
+  btn.disabled = true;
+  btn.textContent = '分析中…';
+  try {
+    const r = await api('/api/ai/analyze', { method: 'POST', body: { force: !!force } });
+    state.ai = { ...(state.ai || {}), insight: r };
+    renderAiBody(state.ai);
+    toast(r.cached ? '用的还是这份最新分析' : '分析已生成');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = state.ai && state.ai.insight ? '重新生成' : '生成分析';
+  }
 }
 
 /* ---------------- 记账 ---------------- */
@@ -1022,6 +1112,42 @@ async function renderSettings() {
   $('#db-path').textContent = 'data/assetbook.db';
 }
 
+async function renderAiSettings() {
+  let s;
+  try {
+    s = await api('/api/ai/settings');
+  } catch (err) { return; }
+  state.ai = { ...(state.ai || {}), ...s };
+
+  $('#ai-base').value = s.base || '';
+  $('#ai-model').value = s.model || '';
+  const keyEl = $('#ai-key');
+  keyEl.value = '';
+  keyEl.placeholder = s.key_set ? `已保存 ${s.key_hint}，留空就不改` : '粘贴你的 API Key';
+  $('#ai-key-clear').hidden = !s.key_set;
+
+  const tag = $('#ai-cfg-state');
+  tag.textContent = s.configured
+    ? (s.source === 'env' ? '已配置（来自环境变量）' : '已配置')
+    : '未配置';
+  tag.className = 'tag' + (s.configured ? '' : ' warn-tag');
+}
+
+async function saveAiSettings() {
+  try {
+    await api('/api/ai/settings', {
+      method: 'PUT',
+      body: {
+        base: $('#ai-base').value.trim(),
+        model: $('#ai-model').value.trim(),
+        key: $('#ai-key').value.trim(),
+      },
+    });
+    toast('AI 配置已保存');
+    await renderAiSettings();
+  } catch (err) { toast(err.message, true); }
+}
+
 function openAccountForm() {
   openModal('新增账户', `
     <div class="modal-cols">
@@ -1264,6 +1390,15 @@ function bind() {
   $('#account-add').addEventListener('click', openAccountForm);
   $('#rule-add').addEventListener('click', openRuleForm);
   $('#category-add').addEventListener('click', openCategoryForm);
+  $('#ai-save').addEventListener('click', saveAiSettings);
+  $('#ai-key-clear').addEventListener('click', async () => {
+    if (!confirm('清除已保存的 API Key？清掉之后 AI 分类和分析都会停用。')) return;
+    try {
+      await api('/api/ai/settings', { method: 'PUT', body: { clear_key: true } });
+      toast('Key 已清除');
+      await renderAiSettings();
+    } catch (err) { toast(err.message, true); }
+  });
   $('#account-body').addEventListener('click', async (e) => {
     const cal = e.target.dataset['校准'];
     if (cal) {
@@ -1318,6 +1453,9 @@ function bind() {
 
   // 行情刷新
   $('#refresh-quotes').addEventListener('click', refreshQuotes);
+
+  // AI 财务分析：已有结果时再点就是强制重新生成
+  $('#ai-run').addEventListener('click', () => runAiAnalyze(!!(state.ai && state.ai.insight)));
 
   // 自动同步
   $('#auto-save').addEventListener('click', saveAutoSettings);

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+import ai
 import db
+import insights
 import quotes
 import scheduler as sched
 import security
 import services as svc
-from models import AutoSyncIn, BudgetIn, HoldingIn, HoldingPatch, PriceIn
+from models import (AiSettingsIn, AnalyzeIn, AutoSyncIn, BudgetIn, HoldingIn,
+                    HoldingPatch, PriceIn)
 
 router = APIRouter(prefix="/api", tags=["assets"], dependencies=[Depends(security.require_auth)])
 
@@ -187,6 +190,48 @@ async def auto_run(what: str):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "只支持 quotes / rates / networth / inbox / mail")
     return await sched.scheduler.run_now(what)
+
+
+# ---------- AI 分析 ----------
+
+@router.get("/ai/settings")
+def ai_settings():
+    """当前 AI 配置（不含明文 key），以及这个月有没有现成的分析。"""
+    return {
+        **ai.public(),
+        "insight": insights.cached(),
+    }
+
+
+@router.put("/ai/settings")
+def ai_settings_save(payload: AiSettingsIn):
+    data = payload.model_dump()
+    try:
+        return ai.save(
+            base=data.get("base"),
+            key=data.get("key"),
+            model=data.get("model"),
+            clear_key=bool(data.get("clear_key")),
+        )
+    except Exception as e:  # 写库失败
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"保存失败：{e}") from e
+
+
+@router.post("/ai/analyze")
+def ai_analyze(payload: AnalyzeIn):
+    """生成财务分析。默认命中当月缓存就直接返回，force=True 才重新烧一次。"""
+    try:
+        return insights.analyze(month=payload.month, force=payload.force)
+    except ai.AIError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    except Exception as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"生成失败：{e}") from e
+
+
+@router.get("/ai/snapshot")
+def ai_snapshot(month: str | None = None):
+    """给模型看的那份数据包长什么样 —— 方便自查分析是不是基于真实数字。"""
+    return insights.snapshot(month)
 
 
 # ---------- 预算 ----------

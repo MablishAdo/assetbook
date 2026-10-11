@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime, timedelta
 
+import ai
 import db
 import quotes
 
@@ -281,44 +281,30 @@ def classify_by_rules(note: str) -> int | None:
 
 
 def ai_classify(note: str, tx_type: str) -> int | None:
-    """可选的 AI 兜底分类：配置了 OPENAI 兼容接口才会生效，否则返回 None。
+    """可选的 AI 兜底分类：配置了 OpenAI 兼容接口才会生效，否则返回 None。
 
-    环境变量：ASSETBOOK_AI_BASE（如 https://api.openai.com/v1）
-             ASSETBOOK_AI_KEY
-             ASSETBOOK_AI_MODEL（默认 gpt-4o-mini）
+    配置来自 ai.config()：数据库里的「设置 → AI 分析」优先，其次环境变量
+    ASSETBOOK_AI_BASE / KEY / MODEL。
     """
-    base = os.environ.get("ASSETBOOK_AI_BASE")
-    key = os.environ.get("ASSETBOOK_AI_KEY")
-    if not base or not key or not note:
+    if not note or not ai.configured():
         return None
+    cats = db.q("SELECT id, name FROM categories WHERE kind = ?",
+                ("income" if tx_type == "in" else "expense"))
+    if not cats:
+        return None
+    names = [c["name"] for c in cats]
+    prompt = (
+        f"从这些记账分类里选一个最合适的，只回分类名，不要解释：{', '.join(names)}\n"
+        f"交易备注：{note}"
+    )
     try:
-        import json
-        import urllib.request
-
-        cats = db.q("SELECT id, name FROM categories WHERE kind = ?", ("income" if tx_type == "in" else "expense"))
-        names = [c["name"] for c in cats]
-        prompt = (
-            f"从这些记账分类里选一个最合适的，只回分类名，不要解释：{', '.join(names)}\n"
-            f"交易备注：{note}"
-        )
-        body = json.dumps({
-            "model": os.environ.get("ASSETBOOK_AI_MODEL", "gpt-4o-mini"),
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-        }).encode()
-        req = urllib.request.Request(
-            base.rstrip("/") + "/chat/completions",
-            data=body,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-        answer = data["choices"][0]["message"]["content"].strip()
-        for c in cats:
-            if c["name"] in answer:
-                return c["id"]
-    except Exception:
+        answer = ai.chat([{"role": "user", "content": prompt}],
+                         temperature=0, timeout=20)["content"]
+    except ai.AIError:
         return None
+    for c in cats:
+        if c["name"] in answer:
+            return c["id"]
     return None
 
 
