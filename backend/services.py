@@ -79,15 +79,44 @@ def holdings_with_value() -> list[dict]:
     out = []
     for r in rows:
         d = dict(r)
+        d["amount"] = round(d.get("amount") or 0, 2)
+        d["prev_close"] = d.get("prev_close")
         d["market_value"] = round(d["units"] * d["price"], 2)
         d["cost_value"] = round(d["units"] * d["cost_price"], 2)
         d["profit"] = round(d["market_value"] - d["cost_value"], 2)
         d["profit_pct"] = round(d["profit"] / d["cost_value"] * 100, 2) if d["cost_value"] else 0.0
+        # 今日盈亏：股票/ETF = 份额 ×（现价 − 昨收）；
+        # 场外基金（金额模式）= 金额 ×（净值/昨净值 − 1），份额模式 = 份额 ×（净值 − 昨净值）
+        d["today_profit"] = _today_profit(d)
         d["kind_label"] = HOLDING_LABELS.get(d["kind"], d["kind"])
         d["market"] = d.get("market") or "auto"
         d["market_label"] = quotes.MARKETS.get(d["market"], d["market"])
         out.append(d)
     return out
+
+
+def _today_profit(h: dict) -> float:
+    """单条持仓的「今日盈亏」。无昨收/昨净值时返回 0。"""
+    market = (h.get("market") or "").strip()
+    kind = (h.get("kind") or "").strip()
+    prev = h.get("prev_close")
+    price = h.get("price") or 0
+    amount = h.get("amount") or 0
+    units = h.get("units") or 0
+    if not prev or prev <= 0 or price <= 0:
+        return 0.0
+    # 场外基金：复用 prev_close 字段存昨日净值
+    is_fund = market == "fund" or kind == "fund"
+    if is_fund:
+        if amount > 0:
+            return round(amount * (price / prev - 1), 2)
+        if units > 0:
+            return round(units * (price - prev), 2)
+        return 0.0
+    # 股票 / ETF / 港股
+    if units > 0:
+        return round(units * (price - prev), 2)
+    return 0.0
 
 
 def holdings_total() -> float:
@@ -546,15 +575,26 @@ def refresh_quotes(holding_ids: list[int] | None = None) -> dict:
     if hits:
         with db.tx() as conn:
             for hid, q in hits.items():
+                prev = q.get("prev_close")
                 conn.execute(
-                    "UPDATE holdings SET price = ?, price_date = ? WHERE id = ?",
-                    (q["price"], q["date"], hid),
+                    "UPDATE holdings SET price = ?, price_date = ?, prev_close = ? WHERE id = ?",
+                    (q["price"], q["date"], prev, hid),
                 )
+                # 场外基金：按今日净值涨跌幅自动刷新「持有金额」
+                # （上次录的金额是某个时点的市值，净值跌了金额也要跟着跌，才和支付宝对得上）
+                market = (q.get("market") or "").strip()
+                if market == "fund" and prev and prev > 0:
+                    row = conn.execute("SELECT amount FROM holdings WHERE id = ?", (hid,)).fetchone()
+                    old = float(row["amount"] or 0) if row else 0
+                    if old > 0:
+                        new_amount = round(old * q["price"] / prev, 2)
+                        conn.execute("UPDATE holdings SET amount = ? WHERE id = ?", (new_amount, hid))
                 updated.append({
                     "id": hid,
                     "price": q["price"],
+                    "prev_close": prev,
                     "date": q["date"],
-                    "market": q.get("market"),
+                    "market": market,
                     "name": q.get("name"),
                 })
     return {

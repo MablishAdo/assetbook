@@ -196,6 +196,8 @@ SCHEMA_VERSION = "3"
 # 老库升级用的补丁：列名 → 建表语句里的定义。加新列写这里就行。
 MIGRATIONS: list[tuple[str, str, str]] = [
     ("holdings", "market", "TEXT NOT NULL DEFAULT 'auto'"),
+    ("holdings", "amount", "REAL NOT NULL DEFAULT 0"),
+    ("holdings", "prev_close", "REAL"),
     ("transactions", "external_id", "TEXT"),
     ("transactions", "batch", "TEXT"),
     ("transactions", "raw", "TEXT"),

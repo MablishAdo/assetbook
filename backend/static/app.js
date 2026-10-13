@@ -763,28 +763,38 @@ async function doImport() {
 async function loadHoldings() {
   const data = await api('/api/holdings');
   const pnl = data.total_profit;
+  const todayPnl = data.total_today_profit || 0;
   $('#holding-kpis').innerHTML = [
+    { label: '今日盈亏', val: fmt0(todayPnl), sub: '持仓×(今-昨)', cls: cls(todayPnl) },
     { label: '持仓市值', val: fmt0(data.total_market), sub: '' },
     { label: '投入成本', val: fmt0(data.total_cost), sub: '' },
-    { label: '浮动盈亏', val: fmt0(pnl), sub: data.total_cost ? ((pnl / data.total_cost) * 100).toFixed(1) + '%' : '—', cls: cls(pnl) },
+    { label: '累计盈亏', val: fmt0(pnl), sub: data.total_cost ? ((pnl / data.total_cost) * 100).toFixed(1) + '%' : '—', cls: cls(pnl) },
     { label: '持仓数', val: data.items.length + ' 项', sub: '' },
   ].map((k) => `<div class="stat"><div class="stat-label">${k.label}</div>
       <div class="stat-val ${k.cls || ''}">${k.val}</div><div class="stat-sub">${esc(k.sub)}</div></div>`).join('');
 
   state.holdById = {};
   data.items.forEach((h) => { state.holdById[h.id] = h; });
+  const unitsCell = (h) => {
+    // 场外基金按金额录入时显示「金额」优先，否则显示份额
+    if ((h.market === 'fund' || h.kind === 'fund') && (h.amount || 0) > 0) {
+      return `${fmt(h.amount)} <span class="muted" style="font-size:11px">金额</span>`;
+    }
+    return h.units;
+  };
   $('#holding-body').innerHTML = data.items.length ? data.items.map((h) => `
     <tr>
       <td data-label="名称">${esc(h.name)}${h.code ? ` <span class="muted">${esc(h.code)}</span>` : ''}
         ${h.market && h.market !== 'auto' ? `<span class="tag tiny-tag">${esc(h.market_label || h.market)}</span>` : ''}</td>
       <td data-label="类型"><span class="tag">${esc(h.kind_label)}</span></td>
-      <td data-label="份额" class="num">${h.units}</td>
+      <td data-label="份额/金额" class="num">${unitsCell(h)}</td>
       <td data-label="成本价" class="num">${h.cost_price}</td>
       <td data-label="现价" class="num"><input class="input price-input" type="number" step="0.0001" value="${h.price}" data-price="${h.id}"></td>
       <td data-label="市值" class="num">${fmt(h.market_value)}</td>
-      <td data-label="盈亏" class="num ${cls(h.profit)}">${fmt(h.profit)}<br><span class="muted" style="font-size:11px">${h.profit_pct.toFixed(2)}%</span></td>
+      <td data-label="今日盈亏" class="num ${cls(h.today_profit)}">${fmt(h.today_profit)}</td>
+      <td data-label="累计盈亏" class="num ${cls(h.profit)}">${fmt(h.profit)}<br><span class="muted" style="font-size:11px">${h.profit_pct.toFixed(2)}%</span></td>
       <td data-label=""><div class="row-actions"><button class="btn tiny" data-edit-holding="${h.id}">编辑</button><button class="btn tiny danger" data-del-holding="${h.id}">删除</button></div></td>
-    </tr>`).join('') : '<tr><td colspan="8"><div class="empty">还没有持仓，点右上角新增</div></td></tr>';
+    </tr>`).join('') : '<tr><td colspan="9"><div class="empty">还没有持仓，点右上角新增</div></td></tr>';
 
   const byKind = {};
   data.items.forEach((h) => { byKind[h.kind_label] = (byKind[h.kind_label] || 0) + h.market_value; });
@@ -809,10 +819,11 @@ function openHoldingForm() {
       <label class="field"><span>名称</span><input class="input" id="h-name" placeholder="填代码可自动带出"></label>
       <label class="field"><span>类型</span><select class="input" id="h-kind">${kindOpts}</select></label>
       <label class="field"><span>份额</span><input class="input" type="number" step="0.0001" id="h-units" value="0"></label>
+      <label class="field"><span>持有金额<span class="muted" style="font-size:11px">（场外基金）</span></span><input class="input" type="number" step="0.01" id="h-amount" value="0" placeholder="支付宝里的持有金额"></label>
       <label class="field"><span>成本价</span><input class="input" type="number" step="0.0001" id="h-cost" value="0"></label>
       <label class="field"><span>现价</span><input class="input" type="number" step="0.0001" id="h-price" value="0"></label>
     </div>
-    <p class="hint" id="h-probe">填好代码后会试拉一次行情，成功就自动填名称和现价。</p>
+    <p class="hint" id="h-probe">填好代码后会试拉一次行情，成功就自动填名称和现价。场外基金可填「持有金额」按金额看盈亏（不填则按份额）。</p>
     <button class="btn primary block" id="h-save">保存</button>
   `, () => {
     const probe = $('#h-probe');
@@ -859,6 +870,7 @@ function openHoldingForm() {
             kind: $('#h-kind').value,
             market: $('#h-market').value,
             units: parseFloat($('#h-units').value) || 0,
+            amount: parseFloat($('#h-amount').value) || 0,
             cost_price: parseFloat($('#h-cost').value) || 0,
             price: parseFloat($('#h-price').value) || 0,
           },
@@ -888,10 +900,11 @@ function openHoldingEdit(h) {
       <label class="field"><span>类型</span><select class="input" id="eh-kind">${kindOpts}</select></label>
       <label class="field"><span>市场</span><select class="input" id="eh-market">${marketOpts}</select></label>
       <label class="field"><span>份额</span><input class="input" type="number" step="0.0001" id="eh-units" value="${h.units}"></label>
+      <label class="field"><span>持有金额<span class="muted" style="font-size:11px">（场外基金）</span></span><input class="input" type="number" step="0.01" id="eh-amount" value="${h.amount || 0}"></label>
       <label class="field"><span>成本价</span><input class="input" type="number" step="0.0001" id="eh-cost" value="${h.cost_price}"></label>
       <label class="field"><span>现价</span><input class="input" type="number" step="0.0001" id="eh-price" value="${h.price}"></label>
     </div>
-    <p class="hint" style="margin-top:0">交易之后把份额改成新的持有量即可；改成本价，盈亏按新成本算。</p>
+    <p class="hint" style="margin-top:0">交易之后把份额改成新的持有量即可；改成本价，盈亏按新成本算。场外基金可改「持有金额」按金额看盈亏。</p>
     <button class="btn primary block" id="eh-save">保存修改</button>
   `, () => {
     $('#eh-save').addEventListener('click', async () => {
@@ -906,6 +919,7 @@ function openHoldingEdit(h) {
             kind: $('#eh-kind').value,
             market: $('#eh-market').value,
             units: parseFloat($('#eh-units').value) || 0,
+            amount: parseFloat($('#eh-amount').value) || 0,
             cost_price: parseFloat($('#eh-cost').value) || 0,
             price: parseFloat($('#eh-price').value) || 0,
           },
