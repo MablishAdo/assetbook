@@ -159,10 +159,7 @@ def _sym_to_code(sym: str) -> str:
 
 
 def _parse_tencent(text: str) -> dict[str, dict]:
-    """把 v_sh510300="1~名称~代码~现价~昨收~..." 解析成 {代码: {...}}
-
-    字段顺序：f[1]=名称, f[3]=现价, f[4]=昨收, f[30]=行情时间戳(YYYYMMDDHHMMSS)
-    """
+    """把 v_sh510300="1~名称~代码~现价~昨收~..." 解析成 {代码: {...}}"""
     out: dict[str, dict] = {}
     for sym, payload in _TENCENT_LINE.findall(text):
         f = payload.split("~")
@@ -178,17 +175,8 @@ def _parse_tencent(text: str) -> dict[str, dict]:
             continue
         if price <= 0:
             continue
-        prev_close = 0.0
-        if len(f) > 4:
-            try:
-                pc = float((f[4] or "0").strip())
-                if pc > 0:
-                    prev_close = pc
-            except ValueError:
-                pass
         out[code] = {
             "price": round(price, 6),
-            "prev_close": round(prev_close, 6) if prev_close else None,
             "name": (f[1] or "").strip() or None,
             "date": _today_from(f[30] if len(f) > 30 else ""),
         }
@@ -301,12 +289,12 @@ def fetch_market(pairs: list[tuple[str, str]]) -> dict[str, dict]:
 
 _FUND_NAV = (
     "https://api.fund.eastmoney.com/f10/lsjz"
-    "?fundCode={code}&pageIndex=1&pageSize=2&_={ts}"
+    "?fundCode={code}&pageIndex=1&pageSize=1&_={ts}"
 )
 
 
 def fetch_fund_nav(code: str) -> dict:
-    """场外基金单位净值。返回今日净值 + 昨日净值（用于算「今日盈亏」）。"""
+    """场外基金单位净值。"""
     url = _FUND_NAV.format(code=urllib.parse.quote(code.strip()),
                            ts=int(time.time() * 1000))
     data = _fetch_json(url, referer="https://fundf10.eastmoney.com/")
@@ -318,15 +306,8 @@ def fetch_fund_nav(code: str) -> dict:
         price = float(row.get("DWJZ"))
     except (TypeError, ValueError) as e:
         raise QuoteError("净值字段异常") from e
-    prev_nav = 0.0
-    if len(rows) > 1:
-        try:
-            prev_nav = float((rows[1] or {}).get("DWJZ") or 0)
-        except (TypeError, ValueError):
-            prev_nav = 0.0
     return {
         "price": round(price, 6),
-        "prev_nav": round(prev_nav, 6) if prev_nav > 0 else None,
         "date": (row.get("FSRQ") or date.today().isoformat())[:10],
         "name": None,
         "market": "fund",
@@ -431,11 +412,7 @@ def fetch_one(market: str, code: str, kind: str = "") -> dict:
         raise QuoteError("币安查不到该交易对，代码写成 BTC 或 BTCUSDT 都行")
 
     if m == "fund":
-        got = fetch_fund_nav(code)
-        # 字段统一：基金用 prev_close 字段存昨日净值，便于服务层一处处理
-        if got.get("prev_nav") and not got.get("prev_close"):
-            got["prev_close"] = got["prev_nav"]
-        return got
+        return fetch_fund_nav(code)
 
     # cn（含 auto 猜出来的）：先沪深，再场外基金
     got = fetch_market([("cn", code)])

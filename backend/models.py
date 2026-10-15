@@ -73,7 +73,6 @@ class HoldingIn(BaseModel):
     market: Market = "auto"
     account_id: Optional[int] = None
     units: float = 0
-    amount: float = Field(default=0, description="场外基金按金额录入时填持有金额")
     cost_price: float = 0
     price: float = 0
     price_date: Optional[str] = None
@@ -89,7 +88,6 @@ class HoldingPatch(BaseModel):
     market: Optional[Market] = None
     account_id: Optional[int] = None
     units: Optional[float] = None
-    amount: Optional[float] = None
     cost_price: Optional[float] = None
     price: Optional[float] = None
     price_date: Optional[str] = None

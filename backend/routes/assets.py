@@ -59,13 +59,12 @@ def list_holdings():
         "total_market": round(sum(h["market_value"] for h in items), 2),
         "total_cost": round(sum(h["cost_value"] for h in items), 2),
         "total_profit": round(sum(h["profit"] for h in items), 2),
-        "total_today_profit": round(sum(h["today_profit"] for h in items), 2),
     }
 
 
 @router.post("/holdings", status_code=201)
 def create_holding(payload: HoldingIn):
-    price, price_date, prev_close = payload.price, payload.price_date, None
+    price, price_date = payload.price, payload.price_date
     name = payload.name
 
     # 填了代码就让行情接口顺手补个现价（失败不影响创建）
@@ -73,20 +72,16 @@ def create_holding(payload: HoldingIn):
         try:
             q = quotes.fetch_one(payload.market, payload.code, payload.kind)
             price, price_date = q["price"], q["date"]
-            prev_close = q.get("prev_close")
             if not name.strip() and q.get("name"):
                 name = q["name"]
         except quotes.QuoteError:
             pass
 
     cur = db.execute(
-        "INSERT INTO holdings (code, name, kind, market, account_id, units, amount, "
-        "cost_price, price, price_date, prev_close, note) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO holdings (code, name, kind, market, account_id, units, cost_price, "
+        "price, price_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (payload.code, name, payload.kind, payload.market, payload.account_id, payload.units,
-         payload.amount,
-         payload.cost_price, price or payload.cost_price, price_date or svc.today(),
-         prev_close, payload.note),
+         payload.cost_price, price or payload.cost_price, price_date or svc.today(), payload.note),
     )
     db.snapshot_networth()
     return {"id": cur.lastrowid}
@@ -115,7 +110,7 @@ def update_price(holding_id: int, payload: PriceIn):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "没这个持仓")
 
     if payload.price > 0:
-        price, pdate, prev_close = payload.price, payload.price_date or svc.today(), None
+        price, pdate = payload.price, payload.price_date or svc.today()
     else:
         if not (row["code"] or "").strip():
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个持仓没填代码，拉不了行情")
@@ -123,11 +118,11 @@ def update_price(holding_id: int, payload: PriceIn):
             q = quotes.fetch_one(row["market"] or "auto", row["code"], row["kind"])
         except quotes.QuoteError as e:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
-        price, pdate, prev_close = q["price"], q["date"], q.get("prev_close")
+        price, pdate = q["price"], q["date"]
 
     db.execute(
-        "UPDATE holdings SET price = ?, price_date = ?, prev_close = ? WHERE id = ?",
-        (price, pdate, prev_close, holding_id),
+        "UPDATE holdings SET price = ?, price_date = ? WHERE id = ?",
+        (price, pdate, holding_id),
     )
     db.snapshot_networth()
     return {"ok": True, "price": price, "price_date": pdate}
