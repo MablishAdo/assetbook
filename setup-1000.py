@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """AssetBook「每月只花 1000」一键配置。
 
-跑完会建好：
-  1. 账户：邮政储蓄（生活费钱包）、工资卡、微信零钱、支付宝
-  2. 每月通用预算合计 1000（餐饮 520 / 交通 100 / 居住 120 / 通讯 40 / 购物 120 / 医疗 60 / 其他 40）
-  3. 映射规则：账单里支付方式含「邮政 / 零钱 / 支付宝 / 余额宝」的，自动归到对应账户
+v2.0 起账户功能已下线，本脚本只建跟钱有关的三样：
+  1. 每月通用预算合计 1000（餐饮 520 / 交通 100 / 居住 120 / 通讯 40 / 购物 120 / 医疗 60 / 其他 40）
+  2. 补齐分类（含不占预算的「房贷」）
+  3. 分类规则：备注里含「买菜 / 水电气 / 话费…」的自动归类
 
 可以重复跑，不会重复建。
 
@@ -15,7 +15,7 @@
 
 密码的查找顺序：命令行参数 → 环境变量 ASSETBOOK_PASSWORD → 同目录 .env 里的 ASSETBOOK_PASSWORD → 交互输入。
 
-想改账户或预算，直接改下面三个列表再跑一次（预算会覆盖，账户/分类不会重复建）。
+想改预算或规则，直接改下面两个列表再跑一次（预算会覆盖，分类与规则不会重复建）。
 """
 
 from __future__ import annotations
@@ -28,18 +28,6 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-
-# 账户：(名字, 类型, 排序)  类型取值见 界面「新增账户」：
-#   bank 银行卡 / payment 支付账户 / cash 现金 / broker 券商 / credit 信用卡 / loan 贷款
-# 排在最前面的会成为「记一笔」里默认选中的账户
-ACCOUNTS: list[tuple[str, str, int]] = [
-    ("邮政储蓄", "bank", 0),      # 生活费钱包：每月转 1000 进来，日常优先刷这张
-    ("工商银行", "bank", 1),      # 工资卡：工资进这里
-    ("中国银行", "bank", 2),      # 还房贷的卡（钱从这里扣）
-    ("微信零钱", "payment", 4),
-    ("支付宝", "payment", 5),
-    ("房贷欠款", "loan", 9),      # 负债账户：只记「还欠多少」，偶尔更新一次即可
-]
 
 # 需要用到、但【不设预算】的分类（一设预算就会占那 1000，所以单独列）
 EXTRA_CATEGORIES: list[str] = [
@@ -55,18 +43,6 @@ BUDGET: list[tuple[str, float]] = [
     ("购物", 120),   # 日用品、洗护
     ("医疗", 60),    # 常备药
     ("其他", 40),    # 机动，别花掉，留给意外
-]
-
-# 账单里的「收/付款方式」→ 账户：包含左边这个词就落到右边账户
-PAYEE_RULES: list[tuple[str, str]] = [
-    ("邮政", "邮政储蓄"),
-    ("工商", "工商银行"),
-    ("工行", "工商银行"),
-    ("中国银行", "中国银行"),
-    ("中行", "中国银行"),
-    ("零钱", "微信零钱"),
-    ("余额宝", "支付宝"),
-    ("支付宝", "支付宝"),
 ]
 
 # 记账备注关键词 → 分类：备注里包含左边这个词就自动归到右边分类（已有的不会重复建）
@@ -157,26 +133,7 @@ def main() -> None:
             sys.exit(1)
         print("· 已登录")
 
-    # 2. 账户
-    code, res = api.get("/api/accounts?include_archived=false")
-    existing = {a["name"]: a["id"] for a in (res.get("items", []) if isinstance(res, dict) else [])}
-    account_id: dict[str, int] = {}
-    for name, kind, sort in ACCOUNTS:
-        if name in existing:
-            account_id[name] = existing[name]
-            print(f"· 账户「{name}」已存在")
-            continue
-        code, res = api.post("/api/accounts", {
-            "name": name, "kind": kind, "currency": "CNY",
-            "base_balance": 0, "sort": sort,
-        })
-        if code not in (200, 201):
-            print(f"× 建账户「{name}」失败：{res}")
-            continue
-        account_id[name] = res["id"]
-        print(f"· 已建账户「{name}」")
-
-    # 3. 分类（复用内置的，缺哪个补哪个）
+    # 2. 分类（复用内置的，缺哪个补哪个）
     code, res = api.get("/api/categories")
     cats = {c["name"]: c["id"] for c in (res.get("items", []) if isinstance(res, dict) else [])}
     for name in [n for n, _ in BUDGET] + EXTRA_CATEGORIES:
@@ -186,7 +143,7 @@ def main() -> None:
                 cats[name] = res["id"]
                 print(f"· 已建分类「{name}」")
 
-    # 4. 分类规则（备注里含关键词就自动归类）
+    # 3. 分类规则（备注里含关键词就自动归类）
     code, res = api.get("/api/rules")
     keywords = {r["keyword"] for r in (res.get("items", []) if isinstance(res, dict) else [])}
     added = 0
@@ -199,7 +156,7 @@ def main() -> None:
     if added:
         print(f"· 补了 {added} 条分类规则（买菜、水电气、话费…）")
 
-    # 5. 预算（month='*' = 每月通用，重复跑会覆盖成同样的值）
+    # 4. 预算（month='*' = 每月通用，重复跑会覆盖成同样的值）
     total = 0.0
     for name, amount in BUDGET:
         cid = cats.get(name)
@@ -213,26 +170,9 @@ def main() -> None:
         total += amount
         print(f"· 预算 {name:<4} {amount:>6.0f}")
 
-    # 6. 映射规则：账单里的支付方式自动落到对应账户
-    code, res = api.get("/api/payee-rules")
-    rules = res.get("items", []) if isinstance(res, dict) else []
-    for pattern, acct_name in PAYEE_RULES:
-        target = account_id.get(acct_name)
-        if not target:
-            continue
-        if any(r["pattern"] == pattern and r["account_id"] == target for r in rules):
-            continue
-        api.post("/api/payee-rules", {"pattern": pattern, "account_id": target, "priority": 10})
-        print(f"· 映射规则：「{pattern}」→ {acct_name}")
-
-    print(f"\n√ 好了。账户 {len(account_id)} 个，每月预算合计 {total:.0f}")
-    print(f"  「房贷」是分类（记月供支出），「房贷欠款」是账户（记还欠多少），两个别混。")
-    print("  每月三条记录：")
-    print("    工商银行 → 中国银行   转账：把月供放进还款卡")
-    print("    中国银行  支出 月供，分类选「房贷」（不占那 1000）")
-    print("    工商银行 → 邮政储蓄   转账 1000（这就是你全部的生活费）")
-    print("  花钱从哪个账户走都照记，预算按分类合计，超没超 1000 一眼看得出。")
-    print("  「房贷欠款」不用每月改，隔几个月校准一次填剩余欠款就行（填正数）。")
+    print(f"\n√ 好了。每月预算合计 {total:.0f}，分类规则补了 {added} 条。")
+    print("  「房贷」是分类：月供按「支出」记，分类选它，不占那 1000。")
+    print("  预算按分类合计，超没超 1000 在「设置 → 月度预算」里一眼看得出。")
 
 
 if __name__ == "__main__":
