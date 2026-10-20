@@ -291,10 +291,96 @@ _FUND_NAV = (
     "https://api.fund.eastmoney.com/f10/lsjz"
     "?fundCode={code}&pageIndex=1&pageSize=1&_={ts}"
 )
+# 名称源 1：东财基金搜索（轻，几百字节）。注意它是模糊搜索，必须按 CODE 精确匹配。
+_FUND_SEARCH = (
+    "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
+    "?m=1&key={code}"
+)
+# 名称源 2：东财基金档案页里的 fS_name（几十 KB，只在源 1 没命中时兜底）。
+_FUND_PROFILE = "https://fund.eastmoney.com/pingzhongdata/{code}.js"
+
+_FUND_NAME_RE = re.compile(r'fS_name\s*=\s*"([^"]+)"')
+
+
+def fetch_fund_name(code: str) -> str | None:
+    """场外基金中文名。两个源都查不到就返回 None（调用方自己决定要不要报错）。"""
+    code = code.strip()
+    if not code:
+        return None
+
+    try:
+        data = _fetch_json(
+            _FUND_SEARCH.format(code=urllib.parse.quote(code)),
+            referer="https://fund.eastmoney.com/",
+        )
+        for item in (data or {}).get("Datas") or []:
+            # 接口会返回一批「相似代码」，只有 CODE 完全相等才是它自己
+            if (item.get("CODE") or "").strip() == code:
+                nm = (item.get("NAME") or "").strip()
+                if nm:
+                    return nm
+                break
+    except QuoteError:
+        pass
+
+    try:
+        text = _fetch_raw(_FUND_PROFILE.format(code=urllib.parse.quote(code)))
+        m = _FUND_NAME_RE.search(text)
+        if m:
+            return m.group(1).strip() or None
+    except QuoteError:
+        pass
+
+    return None
+
+
+def fetch_fund_profile(code: str) -> dict:
+    """场外基金概况：申购费率、起购金额、申赎状态。
+
+    费率两个字段的含义（东财 FundMNBasicInformation 接口原样返回）：
+      rate        折后费率，第三方平台常见 1 折
+      source_rate 原费率基金公司挂价
+    """
+    code = code.strip()
+    if not code:
+        raise QuoteError("没填代码")
+    url = (
+        "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation"
+        f"?FCODE={urllib.parse.quote(code)}&deviceid=1&plat=Android"
+        "&product=EFund&version=6.2.8"
+    )
+    data = _fetch_json(url, referer="https://fund.eastmoney.com/")
+    d = (data or {}).get("Datas") or {}
+    if not d or d.get("FCODE") != code:
+        raise QuoteError("查不到该基金概况")
+
+    def _pct(v) -> float | None:
+        try:
+            return round(float(str(v).replace("%", "")), 4) / 100.0
+        except (TypeError, ValueError):
+            return None
+
+    def _num(v) -> float | None:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "name": (d.get("SHORTNAME") or "").strip() or None,
+        "rate": _pct(d.get("RATE")),
+        "source_rate": _pct(d.get("SOURCERATE")),
+        "min_buy": _num(d.get("MINSG")),
+        "buy_status": (d.get("SGZT") or "").strip() or None,
+        "sell_status": (d.get("SHZT") or "").strip() or None,
+        "nav": _num(d.get("DWJZ")),
+        "nav_date": (d.get("FSRQ") or "").strip() or None,
+        "market": "fund",
+    }
 
 
 def fetch_fund_nav(code: str) -> dict:
-    """场外基金单位净值。"""
+    """场外基金单位净值 + 中文名。名称取不到不影响净值，price 仍照常返回。"""
     url = _FUND_NAV.format(code=urllib.parse.quote(code.strip()),
                            ts=int(time.time() * 1000))
     data = _fetch_json(url, referer="https://fundf10.eastmoney.com/")
@@ -309,7 +395,7 @@ def fetch_fund_nav(code: str) -> dict:
     return {
         "price": round(price, 6),
         "date": (row.get("FSRQ") or date.today().isoformat())[:10],
-        "name": None,
+        "name": fetch_fund_name(code),
         "market": "fund",
     }
 

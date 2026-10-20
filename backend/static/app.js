@@ -795,6 +795,30 @@ async function loadHoldings() {
   drawDonut($('#holding-donut'), $('#holding-legend'), items);
 }
 
+// 场外基金：用户下单时填的是「金额」，不是份额。按申购金额 × 费率反推份额与含费成本价。
+// 费率优先用接口查到的折后费率（rate），查不到就让用户手填（默认 0.12%）。
+const FUND_FEE_DEFAULT = 0.0012;
+
+function fundFeeInput(fund) {
+  const rate = (fund && typeof fund.rate === 'number' && fund.rate > 0)
+    ? fund.rate : FUND_FEE_DEFAULT;
+  const tag = (fund && fund.rate)
+    ? `（${fund.name ? fund.name + ' ' : ''}折后申购费）`
+    : '（未查到费率，按 0.12% 估算，可改）';
+  return `<label class="field"><span>申购费率</span>
+    <input class="input" type="number" step="0.0001" id="h-fee" value="${rate}">
+    <small class="hint" style="margin:2px 0 0">${tag}</small></label>`;
+}
+
+// 返回 {units, costPrice, note} 或 null（缺关键数据时不硬算，交给用户手填）
+function calcUnitsFromAmount(amount, fee, nav) {
+  if (!(amount > 0) || !(nav > 0)) return null;
+  const f = Math.min(Math.max(fee || 0, 0), 0.5);
+  const units = Math.round((amount * (1 - f)) / nav * 10000) / 10000;
+  if (!(units > 0)) return null;
+  return { units, costPrice: Math.round((amount / units) * 1e6) / 1e6 };
+}
+
 function openHoldingForm() {
   const marketOpts = (state.meta.markets || [{ value: 'auto', label: '自动识别' }])
     .map((m) => `<option value="${m.value}">${esc(m.label)}</option>`).join('');
@@ -804,7 +828,7 @@ function openHoldingForm() {
 
   openModal('新增持仓', `
     <div class="modal-cols">
-      <label class="field"><span>代码</span><input class="input" id="h-code" placeholder="510300 / 00700 / BTC"></label>
+      <label class="field"><span>代码</span><input class="input" id="h-code" placeholder="510300 / 020602 / 00700 / BTC"></label>
       <label class="field"><span>市场</span><select class="input" id="h-market">${marketOpts}</select></label>
       <label class="field"><span>名称</span><input class="input" id="h-name" placeholder="填代码可自动带出"></label>
       <label class="field"><span>类型</span><select class="input" id="h-kind">${kindOpts}</select></label>
@@ -812,11 +836,45 @@ function openHoldingForm() {
       <label class="field"><span>成本价</span><input class="input" type="number" step="0.0001" id="h-cost" value="0"></label>
       <label class="field"><span>现价</span><input class="input" type="number" step="0.0001" id="h-price" value="0"></label>
     </div>
+    <div id="h-amt-box" style="display:none">
+      <div class="modal-cols" style="margin-top:12px">
+        <label class="field"><span>买入金额</span><input class="input" type="number" step="0.01" id="h-amount" placeholder="下的是金额，比如 1000"></label>
+        ${fundFeeInput(null)}
+      </div>
+      <p class="hint" id="h-calc">知道下单金额就够了：填金额和费率，自动算份额与成本价。</p>
+    </div>
     <p class="hint" id="h-probe">填好代码后会试拉一次行情，成功就自动填名称和现价。</p>
     <button class="btn primary block" id="h-save">保存</button>
   `, () => {
     const probe = $('#h-probe');
     let probed = false;
+    let probeData = null;
+
+    // 场外基金两种情况：市场明确选了「场外基金」，或市场是 auto 但探测后确认是场外
+    const isFund = () => $('#h-market').value === 'fund'
+      || ($('#h-market').value === 'auto' && probeData && probeData.market === 'fund');
+
+    const recalc = () => {
+      const box = $('#h-calc');
+      if (!isFund()) { $('#h-amt-box').style.display = 'none'; return; }
+      $('#h-amt-box').style.display = 'block';
+      const amount = parseFloat($('#h-amount').value) || 0;
+      const fee = parseFloat($('#h-fee').value);
+      const nav = parseFloat($('#h-price').value) || 0;
+      const r = calcUnitsFromAmount(amount, fee, nav);
+      if (!r) {
+        box.className = 'hint';
+        box.textContent = nav > 0
+          ? '填上买入金额，自动算份额。'
+          : '先在上面填代码，让它把现价（净值）带出来，再填买入金额。';
+        return;
+      }
+      $('#h-units').value = r.units;
+      $('#h-cost').value = r.costPrice;
+      box.className = 'hint pos';
+      box.textContent = `按净值 ${nav} 算：${amount} 元 ÷ (1-${((fee || 0) * 100).toFixed(3)}%) ÷ ${nav}`
+        + ` ≈ ${r.units} 份，含费成本价 ${r.costPrice}。${(probeData && probeData.date) ? '注意：这是 ' + probeData.date + ' 的净值，今天下单要按晚上公布的净值确认份额。' : ''}`;
+    };
 
     const tryProbe = async () => {
       const code = $('#h-code').value.trim();
@@ -829,14 +887,21 @@ function openHoldingForm() {
           + `&market=${encodeURIComponent($('#h-market').value)}`
           + `&kind=${encodeURIComponent($('#h-kind').value)}`);
         if (q.ok) {
+          probeData = q;
           if (!$('#h-name').value.trim() && q.name) $('#h-name').value = q.name;
           $('#h-price').value = q.price;
+          // 场外基金：把查到的折后费率填进输入框
+          if (q.fund && isFund()) {
+            const f = $('#h-fee');
+            if (f) { f.value = q.fund.rate || FUND_FEE_DEFAULT; recalc(); }
+          }
           probe.className = 'hint pos';
           probe.textContent = `已查到：${q.name || code} · ${q.price}（${q.date}）`;
         } else {
           probe.className = 'hint neg';
           probe.textContent = `没查到：${q.error}。可以换个市场选项，或直接手填现价。`;
         }
+        recalc();
       } catch (err) {
         probe.className = 'hint neg';
         probe.textContent = '查询失败：' + err.message;
@@ -844,8 +909,12 @@ function openHoldingForm() {
     };
 
     $('#h-code').addEventListener('blur', tryProbe);
-    $('#h-market').addEventListener('change', () => { probed = false; tryProbe(); });
-    $('#h-kind').addEventListener('change', () => { probed = false; tryProbe(); });
+    $('#h-market').addEventListener('change', () => { probed = false; tryProbe(); recalc(); });
+    $('#h-kind').addEventListener('change', () => { probed = false; tryProbe(); recalc(); });
+    $('#h-amount').addEventListener('input', recalc);
+    const feeEl = $('#h-fee');
+    if (feeEl) feeEl.addEventListener('input', recalc);
+    recalc();
 
     $('#h-save').addEventListener('click', async () => {
       const name = $('#h-name').value.trim() || $('#h-code').value.trim();

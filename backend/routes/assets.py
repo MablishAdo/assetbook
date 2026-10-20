@@ -148,7 +148,24 @@ async def refresh_quotes():
 def preview_quote(code: str, market: str = "auto", kind: str = "stock"):
     """新增持仓前先探一下代码能不能拉到、叫什么名字。"""
     try:
-        return {"ok": True, **quotes.fetch_one(market, code, kind)}
+        data = quotes.fetch_one(market, code, kind)
+    except quotes.QuoteError as e:
+        return {"ok": False, "error": str(e)}
+
+    # 场外基金额外带上费率与起购额，前端要把「按金额买入」换算成份额
+    if data.get("market") == "fund":
+        try:
+            data["fund"] = quotes.fetch_fund_profile(code)
+        except quotes.QuoteError:
+            data["fund"] = None
+    return {"ok": True, **data}
+
+
+@router.get("/funds/profile")
+def fund_profile(code: str):
+    """单独查场外基金概况：费率、起购额、申赎状态。"""
+    try:
+        return {"ok": True, **quotes.fetch_fund_profile(code)}
     except quotes.QuoteError as e:
         return {"ok": False, "error": str(e)}
 
