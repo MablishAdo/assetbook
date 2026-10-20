@@ -46,36 +46,11 @@ def ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-# ---------------------------------------------------------------- 默认落哪个账户
-
-def inbox_account_id() -> int | None:
-    """收件箱导入时，没匹配到支付方式规则的行落到哪个账户。
-
-    优先看 ASSETBOOK_INBOX_ACCOUNT（可以填账户名，也可以填 id），
-    没配就退回到第一个非负债账户 —— 总比导不进去强。
-    """
-    want = (os.environ.get("ASSETBOOK_INBOX_ACCOUNT") or "").strip()
-    if want:
-        row = db.q1("SELECT id FROM accounts WHERE name = ? AND archived = 0", (want,))
-        if row:
-            return row["id"]
-        if want.isdigit():
-            row = db.q1("SELECT id FROM accounts WHERE id = ?", (int(want),))
-            if row:
-                return row["id"]
-    row = db.q1(
-        "SELECT id FROM accounts WHERE archived = 0 AND kind NOT IN ('credit', 'loan') "
-        "ORDER BY sort, id LIMIT 1",
-    )
-    return row["id"] if row else None
-
-
 # ---------------------------------------------------------------- 收件目录
 
 def scan_inbox() -> dict:
     """扫一遍收件目录。返回 {seen, imported, skipped, failed, details}"""
     ensure_dirs()
-    account_id = inbox_account_id()
     result = {"seen": 0, "imported": 0, "skipped": 0, "failed": 0, "details": []}
 
     for path in sorted(INBOX_DIR.iterdir()):
@@ -87,7 +62,7 @@ def scan_inbox() -> dict:
         try:
             raw = path.read_bytes()
             got = importer.import_bytes(
-                raw, path.name, default_account_id=account_id,
+                raw, path.name,
                 zip_password=os.environ.get("ASSETBOOK_WECHAT_ZIP_PASSWORD", ""),
                 dry_run=False, auto_commit=True,
             )
@@ -136,7 +111,6 @@ def inbox_status() -> dict:
                        if p.is_file() and p.suffix.lower() in BILL_SUFFIXES),
         "imported": sum(1 for p in DONE_DIR.iterdir() if p.is_file()),
         "failed": sum(1 for p in FAILED_DIR.iterdir() if p.suffix.lower() in BILL_SUFFIXES),
-        "account_id": inbox_account_id(),
         "recent": [
             {"file": p.name, "size": p.stat().st_size}
             for p in sorted(DONE_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)[:5]
@@ -207,7 +181,6 @@ def fetch_mail(limit: int = 20) -> dict:
     if not cfg:
         return {"ok": False, "error": "没配置邮箱（ASSETBOOK_IMAP_HOST / USER / PASS）"}
 
-    account_id = inbox_account_id()
     zip_pwd = os.environ.get("ASSETBOOK_WECHAT_ZIP_PASSWORD", "")
     stats = {"ok": True, "mails": 0, "files": 0, "imported": 0, "skipped": 0,
              "failed": 0, "details": []}
@@ -238,7 +211,7 @@ def fetch_mail(limit: int = 20) -> dict:
             subject = _decode(msg.get("Subject"))
             for name, payload in _attachments(msg):
                 stats["files"] += 1
-                got = importer.import_bytes(payload, name, default_account_id=account_id,
+                got = importer.import_bytes(payload, name,
                                             zip_password=zip_pwd, dry_run=False, auto_commit=True)
                 if not got["ok"]:
                     stats["failed"] += 1

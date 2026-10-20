@@ -1,7 +1,7 @@
-"""业务计算：账户余额、净资产、持仓收益、预算执行、报表、自动分类。
+"""业务计算：记账收支、持仓收益、预算执行、报表、自动分类。
 
-所有计算都从流水实时推导，不存冗余余额，避免对不上账。
-账户余额 = 基准余额 + 之后的收入 − 支出 + 转入 − 转出。
+所有计算都从流水与持仓实时推导，不存冗余数字，避免对不上账。
+账户（银行卡余额）功能已在 v2.0 整体移除。
 """
 
 from __future__ import annotations
@@ -14,17 +14,10 @@ import db
 import jev
 import quotes
 
-LIABILITY_KINDS = {"credit", "loan"}
-LIQUID_KINDS = {"cash", "bank", "payment"}
 HOLDING_LABELS = {
     "fund": "基金", "stock": "股票", "bond": "债券",
     "gold": "黄金", "cash": "现金类", "other": "其他",
 }
-ACCOUNT_LABELS = {
-    "cash": "现金", "bank": "银行卡", "payment": "支付账户",
-    "broker": "券商", "credit": "信用卡", "loan": "贷款", "other": "其他",
-}
-
 
 def today() -> str:
     return date.today().isoformat()
@@ -32,44 +25,6 @@ def today() -> str:
 
 def month_of(d: str) -> str:
     return d[:7]
-
-
-# ---------- 账户 ----------
-
-def accounts_with_balance(include_archived: bool = False) -> list[dict]:
-    where = "" if include_archived else "WHERE a.archived = 0"
-    rows = db.q(
-        f"""
-        SELECT a.*,
-               a.base_balance
-               + COALESCE((SELECT SUM(amount) FROM transactions t
-                           WHERE t.account_id = a.id AND t.type = 'in'), 0)
-               - COALESCE((SELECT SUM(amount) FROM transactions t
-                           WHERE t.account_id = a.id AND t.type = 'out'), 0)
-               + COALESCE((SELECT SUM(amount) FROM transactions t
-                           WHERE t.to_account_id = a.id AND t.type = 'transfer'), 0)
-               - COALESCE((SELECT SUM(amount) FROM transactions t
-                           WHERE t.account_id = a.id AND t.type = 'transfer'), 0)
-               AS balance
-        FROM accounts a
-        {where}
-        ORDER BY a.sort, a.id
-        """,
-    )
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["kind_label"] = ACCOUNT_LABELS.get(d["kind"], d["kind"])
-        d["is_liability"] = d["kind"] in LIABILITY_KINDS
-        out.append(d)
-    return out
-
-
-def account_balance(account_id: int) -> float:
-    for a in accounts_with_balance(include_archived=True):
-        if a["id"] == account_id:
-            return a["balance"]
-    return 0.0
 
 
 # ---------- 持仓 ----------
@@ -90,21 +45,52 @@ def holdings_with_value() -> list[dict]:
     return out
 
 
+def holdings_totals() -> dict:
+    """持仓总市值 / 总成本 / 总盈亏。"""
+    items = holdings_with_value()
+    market = round(sum(h["market_value"] for h in items), 2)
+    cost = round(sum(h["cost_value"] for h in items), 2)
+    profit = round(market - cost, 2)
+    return {
+        "market_value": market,
+        "cost_value": cost,
+        "profit": profit,
+        "profit_pct": round(profit / cost * 100, 2) if cost else 0.0,
+        "count": len(items),
+        "winners": sum(1 for h in items if h["profit"] > 0),
+        "losers": sum(1 for h in items if h["profit"] < 0),
+    }
+
+
 def holdings_total() -> float:
-    return round(sum(h["market_value"] for h in holdings_with_value()), 2)
+    return holdings_totals()["market_value"]
 
 
-# ---------- 净资产 ----------
+def holdings_by_kind() -> list[dict]:
+    """按品种聚合并给出占比 —— 配置集中度就靠这个。"""
+    buckets: dict[str, dict] = {}
+    for h in holdings_with_value():
+        key = h["kind_label"]
+        b = buckets.setdefault(key, {"kind": h["kind"], "name": key,
+                                     "market_value": 0.0, "cost_value": 0.0})
+        b["market_value"] += h["market_value"]
+        b["cost_value"] += h["cost_value"]
+    total = sum(b["market_value"] for b in buckets.values()) or 1
+    out = []
+    for b in buckets.values():
+        out.append({
+            "kind": b["kind"], "name": b["name"],
+            "market_value": round(b["market_value"], 2),
+            "cost_value": round(b["cost_value"], 2),
+            "profit": round(b["market_value"] - b["cost_value"], 2),
+            "ratio": round(b["market_value"] / total * 100, 1),
+        })
+    return sorted(out, key=lambda x: -x["market_value"])
+
+
+# ---------- 记账概览 ----------
 
 def compute_summary() -> dict:
-    accts = accounts_with_balance()
-    assets = sum(a["balance"] for a in accts if not a["is_liability"])
-    # 负债账户余额为负（欠款），对外展示为正数「欠款额」；净值 = 资产 + 负债余额
-    liabilities = -sum(a["balance"] for a in accts if a["is_liability"])
-    invest = holdings_total()
-    assets += invest
-    liquid = sum(a["balance"] for a in accts if a["kind"] in LIQUID_KINDS and not a["is_liability"])
-
     m = month_of(today())
     row = db.q1(
         """
@@ -117,8 +103,8 @@ def compute_summary() -> dict:
     )
     month_in, month_out = float(row["mi"]), float(row["mo"])
 
-    # 近 3 个完整月平均支出 → 应急金可支撑月数
-    avg_expense = db.q1(
+    # 近 3 个完整月平均支出
+    avg_expense = float(db.q1(
         """
         SELECT COALESCE(AVG(s), 0) AS a FROM (
           SELECT SUM(amount) AS s FROM transactions
@@ -127,41 +113,22 @@ def compute_summary() -> dict:
         )
         """,
         (m,),
-    )
-    avg_expense = float(avg_expense["a"] or 0)
+    )["a"] or 0)
 
     return {
-        "assets": round(assets, 2),
-        "liabilities": round(liabilities, 2),
-        "net": round(assets - liabilities, 2),
-        "invest": invest,
-        "liquid": round(liquid, 2),
         "month": m,
         "month_in": round(month_in, 2),
         "month_out": round(month_out, 2),
         "month_net": round(month_in - month_out, 2),
         "savings_rate": round((month_in - month_out) / month_in * 100, 1) if month_in else 0.0,
         "avg_month_expense": round(avg_expense, 2),
-        "emergency_months": round(liquid / avg_expense, 1) if avg_expense else 0.0,
+        "invest": holdings_totals(),
     }
 
 
 def allocation() -> list[dict]:
-    """资产配置：账户按类型聚合 + 持仓按品种聚合。"""
-    buckets: dict[str, float] = {}
-    for a in accounts_with_balance():
-        if a["is_liability"] or a["balance"] <= 0:
-            continue
-        buckets[a["kind_label"]] = buckets.get(a["kind_label"], 0) + a["balance"]
-    for h in holdings_with_value():
-        if h["market_value"] <= 0:
-            continue
-        key = f"持仓·{h['kind_label']}"
-        buckets[key] = buckets.get(key, 0) + h["market_value"]
-    total = sum(buckets.values()) or 1
-    items = [{"name": k, "amount": round(v, 2), "ratio": round(v / total * 100, 1)}
-             for k, v in sorted(buckets.items(), key=lambda kv: -kv[1])]
-    return items
+    """资产配置：只按持仓品种聚合（账户已下线）。"""
+    return holdings_by_kind()
 
 
 def month_category_spend(month: str) -> list[dict]:
@@ -178,40 +145,39 @@ def month_category_spend(month: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def networth_series_30d() -> list[dict]:
-    start = (date.today() - timedelta(days=29)).isoformat()
-    rows = {r["date"]: r for r in db.q("SELECT * FROM networth ORDER BY date")}
-    series, last = [], 0.0
-    for r in db.q("SELECT * FROM networth WHERE date < ? ORDER BY date DESC LIMIT 1", (start,)):
-        last = r["net"]
-    day = date.today() - timedelta(days=29)
-    for _ in range(30):
-        key = day.isoformat()
-        if key in rows:
-            last = rows[key]["net"]
-        series.append({"date": key, "net": round(last, 2)})
-        day += timedelta(days=1)
-    return series
+def portfolio_series_30d() -> list[dict]:
+    """近 30 天投资市值曲线。"""
+    return _portfolio_series(30, by_day=True)
 
 
-def networth_series_months(months: int = 12) -> list[dict]:
-    rows = db.q("SELECT * FROM networth ORDER BY date")
-    by_month: dict[str, float] = {}
-    for r in rows:
-        by_month[month_of(r["date"])] = r["net"]
-    out, cursor, last = [], date.today().replace(day=1), 0.0
-    # 往前推 months 个月
-    months_list = []
-    y, m = cursor.year, cursor.month
-    for _ in range(months):
-        months_list.append(f"{y:04d}-{m:02d}")
-        m -= 1
-        if m == 0:
-            y, m = y - 1, 12
-    for key in reversed(months_list):
-        if key in by_month:
-            last = by_month[key]
-        out.append({"month": key, "net": round(last, 2)})
+def portfolio_series_months(months: int = 12) -> list[dict]:
+    return _portfolio_series(months, by_day=False)
+
+
+def _portfolio_series(n: int, by_day: bool) -> list[dict]:
+    rows = {r["date"]: r for r in db.q("SELECT * FROM portfolio_history ORDER BY date")}
+    if by_day:
+        keys, day = [], date.today() - timedelta(days=n - 1)
+        for _ in range(n):
+            keys.append(day.isoformat())
+            day += timedelta(days=1)
+    else:
+        y, m = date.today().year, date.today().month
+        keys = []
+        for _ in range(n):
+            keys.append(f"{y:04d}-{m:02d}")
+            m -= 1
+            if m == 0:
+                y, m = y - 1, 12
+        keys.reverse()
+
+    field = "date" if by_day else "month"
+    out, last = [], 0.0
+    for k in keys:
+        hit = rows.get(k)
+        if hit:
+            last = hit["market_value"]
+        out.append({field: k, "net": round(last, 2)})
     return out
 
 

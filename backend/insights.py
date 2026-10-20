@@ -1,12 +1,12 @@
-"""AI 财务分析 —— 把你账本里的真实数字交给模型，换回一段说人话的分析。
+"""AI 分析 —— 把真实数字交给模型，换回说人话的判断。
 
-流程：
-    1. snapshot()  把账本压成一份小而全的数据包（只放数字和名字，省 token）
-    2. build_prompt() 拼成中文财务顾问的提示词
-    3. analyze()   调模型，结果缓存进 meta 表（同一个月份不重复烧钱）
+两条独立的分析线：
+    1. 记账分析 spending_analyze()   —— 这个月钱花在哪、该不该省
+    2. 持仓分析 portfolio_analyze()  —— 哪些该加仓、哪些该减仓
 
-缓存策略：按月份缓存。账本有新流水时标记 stale，界面提示「建议重新生成」，
-但不会自动重跑 —— 花钱的事让用户点头。
+流程都一样：snapshot() 压成数据包 → build_prompt() → 调模型 → 缓存进 meta。
+缓存按 key 分桶（spending-<月份> / portfolio-<日期>），数据变了标 stale 提示重算，
+但不自动重跑 —— 花钱的事让用户点头。
 """
 
 from __future__ import annotations
@@ -31,16 +31,21 @@ TOP_HOLDINGS = 8
 # ---------------- 快照 ----------------
 
 def _data_fingerprint() -> str:
-    """账本内容的粗指纹：流水条数 + 最大 id + 金额合计。
+    """账本 + 持仓的粗指纹。
 
     新增、删掉、改金额都会让指纹变；只改备注不会 —— 对「分析该不该重跑」够用了。
     用 created_at 不行：那里存的是日期，同一天记两笔看不出变化。
+    持仓的现价与份额也要算进来：价格一变，涨跌幅和配置诊断全变。
     """
-    row = db.q1(
+    tx = db.q1(
         "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS mx, "
         "COALESCE(SUM(amount), 0) AS s FROM transactions"
     )
-    return f"{row['n']}:{row['mx']}:{round(float(row['s']), 2)}"
+    hd = db.q1(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(units * price), 0) AS v FROM holdings"
+    )
+    return (f"{tx['n']}:{tx['mx']}:{round(float(tx['s']), 2)}"
+            f"|{hd['n']}:{round(float(hd['v']), 2)}")
 
 
 def has_data() -> bool:
@@ -74,38 +79,26 @@ def snapshot(month: str | None = None) -> dict:
         for b in budget_rows[:12]
     ]
 
-    # 账户：资产与负债分开列
-    accts = svc.accounts_with_balance()
-    assets = [{"名称": a["name"], "类型": a["kind_label"], "余额": round(a["balance"], 2)}
-              for a in accts if not a["is_liability"] and abs(a["balance"]) >= 0.01]
-    debts = [{"名称": a["name"], "欠款": round(-a["balance"], 2)}
-             for a in accts if a["is_liability"] and abs(a["balance"]) >= 0.01]
-
-    # 持仓：市值 + 盈亏
+    # 持仓：市值 + 盈亏（记账分析只需要概览，不需要逐只）
     holds = sorted(svc.holdings_with_value(), key=lambda h: -h["market_value"])
-    hold_out = [
-        {"名称": h["name"], "类型": h["kind_label"], "市值": round(h["market_value"], 2),
-         "盈亏": round(h["profit"], 2), "盈亏率": f"{h['profit_pct']}%"}
-        for h in holds[:TOP_HOLDINGS] if h["market_value"] > 0
-    ]
+    inv = s["invest"]
 
     return {
         "月份": month,
         "总览": {
-            "净资产": s["net"], "总资产": s["assets"], "总负债": s["liabilities"],
-            "投资市值": s["invest"], "流动资产": s["liquid"],
+            "投资市值": inv["market_value"], "投资成本": inv["cost_value"],
+            "投资盈亏": inv["profit"], "投资盈亏率": f"{inv['profit_pct']}%",
+            "持仓只数": inv["count"],
             "本月收入": s["month_in"], "本月支出": s["month_out"], "本月结余": s["month_net"],
             "储蓄率": f"{s['savings_rate']}%",
             "近3个完整月平均支出": s["avg_month_expense"],
-            "应急金可支撑月数": s["emergency_months"],
         },
         "近几个月收支": [{"月份": t["month"], "收入": t["in"], "支出": t["out"], "结余": t["net"]}
                          for t in trend],
         "本月支出构成": top_cats,
         "预算执行": budget_out,
-        "资产账户": assets,
-        "负债账户": debts,
-        "持仓": hold_out,
+        "持仓种类": [{"品种": k["name"], "市值": k["market_value"], "占比": f"{k['ratio']}%"}
+                     for k in svc.holdings_by_kind()],
     }
 
 
@@ -166,8 +159,8 @@ def cached(month: str | None = None) -> dict | None:
     return data
 
 
-def analyze(month: str | None = None, force: bool = False) -> dict:
-    """生成（或读取缓存）分析结果。"""
+def spending_analyze(month: str | None = None, force: bool = False) -> dict:
+    """生成（或读取缓存）记账分析结果。"""
     month = month or svc.month_of(svc.today())
 
     if not force:

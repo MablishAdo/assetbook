@@ -10,15 +10,16 @@ const COLORS = ['#1c6b52', '#b2612e', '#4a6fa5', '#c08a2d', '#7d5ba6',
                 '#3e8f83', '#a85d75', '#6f6a5e', '#8fae4f', '#b23c2c'];
 
 const state = {
-  view: 'overview',
-  accounts: [],
+  view: 'transactions',
   categories: [],
   rules: [],
-  overview: null,
-  meta: { markets: [], holding_kinds: {}, account_kinds: {} },
-  nwRange: '30',
+  meta: { markets: [], holding_kinds: {} },
+  pfRange: '30',
   tx: { page: 0, limit: 25, total: 0 },
   budgetMonth: new Date().toISOString().slice(0, 7),
+  holdings: { items: [], total_market: 0, total_cost: 0, total_profit: 0 },
+  portfolio: null,
+  ai: null,
 };
 
 /* ---------------- 基础工具 ---------------- */
@@ -112,109 +113,150 @@ async function enterApp() {
 }
 
 async function reloadAll() {
-  const [accounts, categories, rules, meta] = await Promise.all([
-    api('/api/accounts'), api('/api/categories'), api('/api/rules'), api('/api/meta'),
+  const [categories, rules, meta] = await Promise.all([
+    api('/api/categories'), api('/api/rules'), api('/api/meta'),
   ]);
-  state.accounts = accounts.items;
   state.categories = categories.items;
   state.rules = rules.items;
   state.meta = meta;
-  fillAccountSelects();
   fillCategorySelect();
-  await loadOverview();
   refreshSyncNote();
 }
 
 /* ---------------- 路由 ---------------- */
 
-const TITLES = { overview: '概览', transactions: '记账', holdings: '持仓', budgets: '预算', settings: '设置' };
+const TITLES = { transactions: '记账', holdings: '投资', settings: '设置' };
 
 // 同时接受 #overview、#/overview、#/，都归一成视图名
 function currentView() {
   const raw = decodeURIComponent(location.hash).replace(/^#\/?/, '').trim();
-  return TITLES[raw] ? raw : 'overview';
+  return TITLES[raw] ? raw : 'transactions';
 }
 
 function go(view) {
-  if (!TITLES[view]) view = 'overview';
+  if (!TITLES[view]) view = 'transactions';
   state.view = view;
   $$('.nav-item').forEach((b) => b.classList.toggle('is-on', b.dataset.view === view));
   $$('.view').forEach((s) => { s.hidden = s.dataset.view !== view; });
   $('#page-title').textContent = TITLES[view];
   if (location.hash !== '#/' + view) location.hash = '#/' + view;
-  if (view === 'overview') loadOverview().then(renderOverview);
-  if (view === 'transactions') loadTransactions();
-  if (view === 'holdings') { loadHoldings(); refreshSyncNote(); }
-  if (view === 'budgets') renderBudgets();
+  if (view === 'transactions') { loadMonthSummary(); loadTransactions(); loadAiPanel(); }
+  if (view === 'holdings') loadInvestmentPage();
   if (view === 'settings') { renderSettings(); renderAutoPanel(); renderAiSettings(); }
 }
 
-/* ---------------- 概览 ---------------- */
+/* ---------------- 记账页概览 ---------------- */
 
-async function loadOverview() {
-  state.overview = await api('/api/overview');
+async function loadMonthSummary() {
+  try {
+    state.overview = await api('/api/overview');
+    renderTxSummary();
+  } catch (err) {
+    state.overview = null;
+  }
 }
 
-function renderOverview() {
+function renderTxSummary() {
   const o = state.overview;
   if (!o) return;
-  $('#ov-net').textContent = fmt(o.net);
-  $('#ov-assets').textContent = fmt0(o.assets);
-  $('#ov-liab').textContent = fmt0(o.liabilities);
-  $('#ov-invest').textContent = fmt0(o.invest);
+  $('#tx-net').textContent = fmt(o.month_net);
+  $('#tx-net').className = 'val ' + cls(o.month_net);
+  $('#tx-income').textContent = fmt0(o.month_in);
+  $('#tx-expense').textContent = fmt0(o.month_out);
+  $('#tx-rate').textContent = o.month_in ? (o.savings_rate || 0).toFixed(1) + '%' : '—';
 
-  $('#ov-kpis').innerHTML = [
-    { label: '本月收入', val: fmt0(o.month_in), sub: o.month },
-    { label: '本月支出', val: fmt0(o.month_out), sub: '净 ' + fmt0(o.month_net) },
-    { label: '储蓄率', val: (o.savings_rate || 0).toFixed(1) + '%', sub: '本月' },
-    { label: '应急金', val: (o.emergency_months || 0).toFixed(1) + ' 个月', sub: '流动资产 ' + fmt0(o.liquid) },
+  $('#tx-kpis').innerHTML = [
+    { label: '记账月份', val: o.month, sub: '按月归档' },
+    { label: '本月笔数', val: String(state.tx.total || 0), sub: '当前筛选结果' },
+    { label: '近三月均支出', val: fmt0(o.avg_month_expense), sub: '完整月平均' },
+    { label: '投资市值', val: fmt0((o.invest || {}).market_value), sub: '不在本月收支里' },
   ].map((k) => `<div class="stat"><div class="stat-label">${k.label}</div>
-      <div class="stat-val">${k.val}</div><div class="stat-sub">${esc(k.sub)}</div></div>`).join('');
+      <div class="stat-val">${esc(k.val)}</div><div class="stat-sub">${esc(k.sub)}</div></div>`).join('');
+}
 
-  const series = state.nwRange === '30' ? o.networth_30d : o.networth_12m;
-  drawLine($('#nw-chart'), series, state.nwRange === '30' ? 'date' : 'month');
+/* ---------------- 投资页 ---------------- */
+
+function renderHoldingsTable(data) {
+  state.holdings = data;
+  const items = data.items || [];
+  const total = data.total_market || 0;
+  const profit = data.total_profit || 0;
+  const pct = data.total_cost ? (profit / data.total_cost * 100) : 0;
+
+  $('#hd-market').textContent = fmt0(total);
+  $('#hd-cost').textContent = fmt0(data.total_cost);
+  $('#hd-profit').textContent = (profit >= 0 ? '+' : '') + fmt0(profit);
+  $('#hd-profit').className = cls(profit);
+  $('#hd-pct').textContent = data.total_cost ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '—';
+  $('#hd-pct').className = cls(profit);
+
+  const winners = items.filter((h) => h.profit > 0).length;
+  const losers = items.filter((h) => h.profit < 0).length;
+  const top = total ? Math.max(...items.map((h) => h.market_value / total * 100), 0) : 0;
+  $('#hd-kpis').innerHTML = [
+    { label: '持仓只数', val: String(items.length), sub: `盈 ${winners} / 亏 ${losers}` },
+    { label: '最大单只占比', val: top.toFixed(1) + '%', sub: '集中度参考' },
+    { label: '品种数', val: String(new Set(items.map((h) => h.kind)).size), sub: '按品种分' },
+    { label: '总成本', val: fmt0(data.total_cost), sub: '含申购费' },
+  ].map((k) => `<div class="stat"><div class="stat-label">${k.label}</div>
+      <div class="stat-val">${esc(k.val)}</div><div class="stat-sub">${esc(k.sub)}</div></div>`).join('');
+
+  $('#holding-body').innerHTML = items.length ? items.map((h) => `
+    <tr>
+      <td data-label="名称"><div class="h-name">${esc(h.name)}</div>
+        ${h.code ? `<small class="h-code">${esc(h.code)}</small>` : ''}
+        ${h.market && h.market !== 'auto' ? `<span class="tag tiny-tag">${esc(h.market_label || h.market)}</span>` : ''}</td>
+      <td data-label="类型"><span class="tag">${esc(h.kind_label)}</span></td>
+      <td data-label="份额" class="num">${h.units}</td>
+      <td data-label="成本价" class="num">${h.cost_price}</td>
+      <td data-label="现价" class="num"><input class="input price-input" type="number" step="0.0001" value="${h.price}" data-price="${h.id}"></td>
+      <td data-label="市值" class="num">${fmt(h.market_value)}</td>
+      <td data-label="占比" class="num">${total ? (h.market_value / total * 100).toFixed(1) : '0.0'}%</td>
+      <td data-label="盈亏" class="num ${cls(h.profit)}">${h.profit >= 0 ? '+' : ''}${fmt(h.profit)}<br><span class="muted" style="font-size:11px">${h.profit_pct.toFixed(2)}%</span></td>
+      <td data-label=""><div class="row-actions"><button class="btn tiny" data-edit-holding="${h.id}">编辑</button><button class="btn tiny danger" data-del-holding="${h.id}">删除</button></div></td>
+    </tr>`).join('') : '<tr><td colspan="9"><div class="empty">还没有持仓。点右上角「新增持仓」，填个代码就能自动带出名称和现价。</div></td></tr>';
+
+  const byKind = {};
+  items.forEach((h) => { byKind[h.kind_label] = (byKind[h.kind_label] || 0) + h.market_value; });
+  const t = total || 1;
+  const donut = Object.entries(byKind).map(([name, amount]) => ({
+    name, amount, ratio: amount / t * 100,
+  })).sort((a, b) => b.amount - a.amount);
+  drawDonut($('#holding-donut'), $('#holding-legend'), donut);
+
+  $('#holding-body').querySelectorAll('[data-edit-holding]').forEach((btn) => {
+    btn.addEventListener('click', () => openHoldingEdit(state.holdById[+btn.dataset.editHolding]));
+  });
+  $('#holding-body').querySelectorAll('[data-del-holding]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const h = state.holdById[+btn.dataset.delHolding];
+      if (!h || !confirm(`确定删除持仓「${h.name}」？`)) return;
+      try {
+        await api('/api/holdings/' + h.id, { method: 'DELETE' });
+        toast('已删除');
+        await loadInvestmentPage();
+      } catch (err) { toast(err.message, true); }
+    });
+  });
+  $('#holding-body').querySelectorAll('[data-price]').forEach((inp) => {
+    inp.addEventListener('change', () => savePrice(+inp.dataset.price, parseFloat(inp.value) || 0));
+  });
+}
+
+function renderPortfolioChart() {
+  const p = state.portfolio;
+  if (!p) return;
+  const is30 = state.pfRange === '30';
+  const series = is30 ? p.daily : p.monthly;
+  drawLine($('#pf-chart'), series, is30 ? 'date' : 'month');
   const first = series.length ? series[0].net : 0;
   const last = series.length ? series[series.length - 1].net : 0;
-  $('#nw-foot').innerHTML = `<span>起点 ${fmt0(first)}</span>
+  $('#pf-foot').innerHTML = `<span>起点 ${fmt0(first)}</span>
     <span class="${cls(last - first)}">变化 ${last - first >= 0 ? '+' : ''}${fmt0(last - first)}</span>
     <span>现值 ${fmt0(last)}</span>`;
-
-  drawDonut($('#alloc-donut'), $('#alloc-legend'), o.allocation);
-
-  const cats = o.month_categories || [];
-  const max = Math.max(...cats.map((c) => c.amount), 1);
-  $('#ov-cats').innerHTML = cats.length ? cats.map((c, i) => `
-    <div class="cat-row">
-      <span class="name">${esc(c.name)}</span>
-      <span class="bar"><i style="width:${(c.amount / max * 100).toFixed(1)}%;background:${c.color || COLORS[i % COLORS.length]}"></i></span>
-      <span class="amt">${fmt(c.amount)}</span>
-      <span class="pct">${o.month_out ? (c.amount / o.month_out * 100).toFixed(1) : '0.0'}%</span>
-    </div>`).join('') : '<div class="empty">本月还没有支出记录</div>';
-
-  $('#ov-accounts').innerHTML = o.accounts.length ? o.accounts.map((a, i) => `
-    <div class="acct-item" style="--acct-color:${COLORS[i % COLORS.length]}">
-      <div><div class="name">${esc(a.name)} · ${esc(a.kind_label)}</div></div>
-      <div class="amt ${a.is_liability ? 'neg' : ''}">${fmt0(a.balance)}</div>
-    </div>`).join('') : '<div class="empty">还没有账户</div>';
-
-  loadRecent();
-  loadAiPanel();
 }
 
-async function loadRecent() {
-  try {
-    const data = await api('/api/transactions?limit=8');
-    $('#ov-recent').innerHTML = data.items.length ? data.items.map((t) => `
-      <div class="mini-row">
-        <span class="d">${t.date.slice(5)}</span>
-        <span class="n">${esc(t.note || t.category_name || t.account_name || '')}</span>
-        <span class="a ${t.type === 'in' ? 'pos' : t.type === 'out' ? 'neg' : ''}">
-          ${t.type === 'out' ? '−' : t.type === 'in' ? '+' : '⇄'}${fmt0(t.amount)}</span>
-      </div>`).join('') : '<div class="empty">还没有流水</div>';
-  } catch (err) { /* 忽略 */ }
-}
-
-/* ---------------- AI 财务分析 ---------------- */
+/* ---------------- AI 分析：记账 + 持仓 ---------------- */
 
 // 极简 Markdown → HTML：模型固定输出「## 小标题 + 段落 + 列表」，够用就行
 function aiMdToHtml(md) {
@@ -229,10 +271,11 @@ function aiMdToHtml(md) {
     const line = raw.trim();
     if (!line) return closeList();
     const h = line.match(/^#{1,6}\s+(.*)$/);
+    const lvl = line.match(/^(#{1,6})\s+/);
     const li = line.match(/^(?:[-*]|\d+[.、])\s+(.*)$/);
     if (h) {
       closeList();
-      out.push(`<div class="ai-h">${inline(h[1])}</div>`);
+      out.push(`<div class="ai-h ai-h${(lvl ? lvl[1].length : 2)}">${inline(h[1])}</div>`);
     } else if (li) {
       if (!inList) { out.push('<ul class="ai-ul">'); inList = true; }
       out.push(`<li>${inline(li[1])}</li>`);
@@ -245,14 +288,24 @@ function aiMdToHtml(md) {
   return out.join('');
 }
 
-async function loadAiPanel() {
-  const box = $('#ai-body');
-  if (!box) return;
+async function loadAiSettings() {
   try {
-    const s = await api('/api/ai/settings');
-    state.ai = s;
-    renderAiBody(s);
-  } catch (err) { /* 忽略，别影响概览其他部分 */ }
+    state.ai = await api('/api/ai/settings');
+  } catch (err) {
+    state.ai = null;
+  }
+}
+
+// 记账页顶部的 AI 分析面板
+async function loadAiPanel() {
+  await loadAiSettings();
+  renderAiBody(state.ai);
+}
+
+// 投资页的 AI 持仓分析面板
+async function loadPortfolioAiPanel() {
+  await loadAiSettings();
+  renderPortfolioAiBody(state.ai);
 }
 
 function renderAiBody(s) {
@@ -269,12 +322,12 @@ function renderAiBody(s) {
   }
 
   btn.hidden = false;
-  const ins = s.insight;
+  const ins = s.spending;
   btn.textContent = ins ? '重新生成' : '生成分析';
 
   if (!ins) {
     when.textContent = '';
-    box.innerHTML = '<div class="empty">还没有分析。点右上角「生成分析」，我读一遍你的账本，给出一段人话点评。</div>';
+    box.innerHTML = '<div class="empty">还没有分析。点右上角「生成分析」，我读一遍这个月的账本，给出一段人话点评。</div>';
     return;
   }
 
@@ -286,41 +339,93 @@ function renderAiBody(s) {
   box.innerHTML = `${stale}<div class="ai-md">${aiMdToHtml(ins.content)}</div>`;
 }
 
+// 持仓分析：标题里带「加仓 / 持有 / 减仓」的给它上色，一眼能扫到结论
+const ACTION_CLS = { '加仓': 'act-add', '持有': 'act-hold', '减仓': 'act-cut' };
+
+function portfolioMdToHtml(md) {
+  return aiMdToHtml(md).replace(
+    /<div class="ai-h ai-h3">(.*?)<\/div>/g,
+    (all, inner) => {
+      const action = ['加仓', '减仓', '持有'].find((a) => inner.includes(a));
+      return action
+        ? `<div class="ai-h ai-h3 ${ACTION_CLS[action]}">${inner}</div>`
+        : all;
+    });
+}
+
+function renderPortfolioAiBody(s) {
+  const box = $('#pai-body');
+  const when = $('#pai-when');
+  const btn = $('#pai-run');
+  if (!box) return;
+
+  const items = (state.holdings && state.holdings.items) || [];
+  if (!items.length) {
+    when.textContent = '';
+    btn.hidden = true;
+    box.innerHTML = '<div class="empty">先在上面加一只持仓，我才能谈加仓还是减仓。</div>';
+    return;
+  }
+
+  if (!s || !s.configured) {
+    when.textContent = '';
+    btn.hidden = true;
+    box.innerHTML = '<div class="empty">还没配 AI 接口。去「设置 → AI 分析」填上接口地址、模型和 Key，回来就能逐只看建议。</div>';
+    return;
+  }
+
+  btn.hidden = false;
+  const pai = s.portfolio;
+  btn.textContent = pai ? '重新生成' : '生成分析';
+
+  if (!pai) {
+    when.textContent = '';
+    box.innerHTML = '<div class="empty">还没有分析。点右上角「生成分析」，我会先抓每只标的的区间涨跌，再逐只给结论。</div>';
+    return;
+  }
+
+  const tokens = pai.usage && pai.usage.total_tokens ? ` · ${pai.usage.total_tokens} tokens` : '';
+  when.textContent = `${(pai.at || '').replace('T', ' ').slice(0, 16)} · ${pai.model || ''}${tokens}`;
+  const stale = pai.stale
+    ? '<div class="ai-stale">生成之后持仓价格或份额又变了，这份建议的数字有点旧，建议重新生成一次。</div>'
+    : '';
+  box.innerHTML = `${stale}<div class="ai-md">${portfolioMdToHtml(pai.content)}</div>`;
+}
+
+async function runPortfolioAi(force) {
+  const btn = $('#pai-run');
+  btn.disabled = true;
+  btn.textContent = '分析中…';
+  try {
+    const r = await api('/api/ai/portfolio-analyze', { method: 'POST', body: { force: !!force } });
+    state.ai = { ...(state.ai || {}), portfolio: r };
+    renderPortfolioAiBody(state.ai);
+    toast(r.cached ? '用的还是这份最新分析' : '持仓分析已生成');
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false;
+    btn.textContent = '生成分析';
+  }
+}
+
 async function runAiAnalyze(force) {
   const btn = $('#ai-run');
   btn.disabled = true;
   btn.textContent = '分析中…';
   try {
     const r = await api('/api/ai/analyze', { method: 'POST', body: { force: !!force } });
-    state.ai = { ...(state.ai || {}), insight: r };
+    state.ai = { ...(state.ai || {}), spending: r };
     renderAiBody(state.ai);
     toast(r.cached ? '用的还是这份最新分析' : '分析已生成');
   } catch (err) {
     toast(err.message, true);
   } finally {
     btn.disabled = false;
-    btn.textContent = state.ai && state.ai.insight ? '重新生成' : '生成分析';
+    btn.textContent = state.ai && state.ai.spending ? '重新生成' : '生成分析';
   }
 }
 
 /* ---------------- 记账 ---------------- */
-
-function accountOptions() {
-  // 负债账户（信用卡/房贷）排到最后并标注，免得记账时误选
-  const sorted = [...state.accounts].sort((a, b) => (a.is_liability ? 1 : 0) - (b.is_liability ? 1 : 0));
-  return sorted.map((a) =>
-    `<option value="${a.id}">${esc(a.name)}${a.is_liability ? '（欠款）' : ''}</option>`).join('');
-}
-
-function fillAccountSelects() {
-  const opts = accountOptions();
-  const main = $('#tx-account');
-  const to = $('#tx-to');
-  const filter = $('#f-account');
-  if (main) main.innerHTML = opts;
-  if (to) to.innerHTML = opts;
-  if (filter) filter.innerHTML = '<option value="">全部账户</option>' + opts;
-}
 
 function fillCategorySelect() {
   const sel = $('#tx-category');
@@ -336,7 +441,6 @@ function txFilterParams() {
   const q = $('#f-q').value.trim();
   if (q) p.set('q', q);
   if ($('#f-type').value) p.set('type', $('#f-type').value);
-  if ($('#f-account').value) p.set('account_id', $('#f-account').value);
   if ($('#f-month').value) p.set('month', $('#f-month').value);
   p.set('limit', state.tx.limit);
   p.set('offset', state.tx.page * state.tx.limit);
@@ -348,16 +452,16 @@ async function loadTransactions() {
   state.tx.total = data.total;
   state.tx.byId = {};
   data.items.forEach((t) => { state.tx.byId[t.id] = t; });
+  renderTxSummary();
   $('#tx-body').innerHTML = data.items.length ? data.items.map((t) => `
     <tr>
       <td data-label="日期" class="muted">${t.date}</td>
-      <td data-label="类型">${t.type === 'in' ? '收入' : t.type === 'out' ? '支出' : '转账'}</td>
-      <td data-label="账户">${esc(t.account_name || '')}${t.to_account_name ? ' → ' + esc(t.to_account_name) : ''}</td>
+      <td data-label="类型">${t.type === 'in' ? '收入' : '支出'}</td>
       <td data-label="分类">${t.category_name ? `<span class="tag">${esc(t.category_name)}</span>` : '<span class="muted">未分类</span>'}</td>
-      <td data-label="金额" class="num ${t.type === 'in' ? 'pos' : t.type === 'out' ? 'neg' : ''}">${t.type === 'in' ? '+' : t.type === 'out' ? '−' : ''}${fmt(t.amount)}</td>
+      <td data-label="金额" class="num ${t.type === 'in' ? 'pos' : 'neg'}">${t.type === 'in' ? '+' : '−'}${fmt(t.amount)}</td>
       <td data-label="备注" class="muted">${esc(t.note || '')}</td>
       <td data-label=""><div class="row-actions"><button class="btn tiny" data-edit="${t.id}">编辑</button><button class="btn tiny danger" data-del="${t.id}">删除</button></div></td>
-    </tr>`).join('') : '<tr><td colspan="7"><div class="empty">没有符合条件的记录</div></td></tr>';
+    </tr>`).join('') : '<tr><td colspan="6"><div class="empty">没有符合条件的记录</div></td></tr>';
 
   $('#f-count').textContent = `${data.total} 笔 · 收入 ${fmt0(data.sum_in)} · 支出 ${fmt0(data.sum_out)}`;
   const pages = Math.max(1, Math.ceil(data.total / state.tx.limit));
@@ -374,27 +478,18 @@ async function submitTx(e) {
     date: fd.get('date'),
     type: fd.get('type'),
     amount: parseFloat(fd.get('amount')),
-    account_id: parseInt(fd.get('account_id'), 10),
     note: fd.get('note') || '',
     source: 'manual',
   };
-  if (body.type === 'transfer') body.to_account_id = parseInt(fd.get('to_account_id'), 10);
   if (fd.get('category_id')) body.category_id = parseInt(fd.get('category_id'), 10);
   try {
     const res = await api('/api/transactions', { method: 'POST', body });
     toast(res.category_id ? '已记账（自动分类好了）' : '已记账');
     f.reset();
     f.date.value = today();
-    f.account_id.value = body.account_id;
-    await loadOverview();
+    await loadMonthSummary();
     await loadTransactions();
-    await reloadRulesIfNeeded();
   } catch (err) { toast(err.message, true); }
-}
-
-function accOptions(sel) {
-  return state.accounts.map((a) =>
-    `<option value="${a.id}"${Number(sel) === a.id ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
 }
 
 function catOptions(sel) {
@@ -412,36 +507,28 @@ function openTxEdit(t) {
     <div class="modal-cols">
       <label class="field"><span>日期</span><input class="input" id="e-date" type="date" value="${t.date}"></label>
       <label class="field"><span>类型</span><select class="input" id="e-type">
-        ${typeOpt('out', '支出')}${typeOpt('in', '收入')}${typeOpt('transfer', '转账')}</select></label>
+        ${typeOpt('out', '支出')}${typeOpt('in', '收入')}</select></label>
       <label class="field"><span>金额</span><input class="input" type="number" step="0.01" min="0.01" id="e-amount" value="${t.amount}"></label>
-      <label class="field"><span>账户</span><select class="input" id="e-account">${accOptions(t.account_id)}</select></label>
-      <label class="field" id="e-to-wrap" ${t.type === 'transfer' ? '' : 'hidden'}><span>转入账户</span><select class="input" id="e-to">${accOptions(t.to_account_id || '')}</select></label>
       <label class="field"><span>分类</span><select class="input" id="e-cat">${catOptions(t.category_id)}</select></label>
     </div>
     <label class="field"><span>备注</span><input class="input" id="e-note" value="${esc(t.note || '')}"></label>
     <button class="btn primary block" id="e-save">保存修改</button>
   `, () => {
-    $('#e-type').addEventListener('change', (ev) => {
-      $('#e-to-wrap').hidden = ev.target.value !== 'transfer';
-    });
     $('#e-save').addEventListener('click', async () => {
-      const type = $('#e-type').value;
       const body = {
         date: $('#e-date').value,
-        type,
+        type: $('#e-type').value,
         amount: parseFloat($('#e-amount').value),
-        account_id: parseInt($('#e-account').value, 10),
         note: $('#e-note').value || '',
         autocategorize: !$('#e-cat').value,
       };
-      if (body.type === 'transfer') body.to_account_id = parseInt($('#e-to').value, 10);
       if ($('#e-cat').value) body.category_id = parseInt($('#e-cat').value, 10);
-      if (!body.date || !(body.amount > 0) || !body.account_id) return toast('日期、金额、账户都要填', true);
+      if (!body.date || !(body.amount > 0)) return toast('日期和金额都要填', true);
       try {
         await api('/api/transactions/' + t.id, { method: 'PATCH', body });
         toast('已修改');
         closeModal();
-        await loadOverview();
+        await loadMonthSummary();
         await loadTransactions();
       } catch (err) { toast(err.message, true); }
     });
@@ -466,14 +553,8 @@ async function openImport() {
     <div id="imp-channels" class="imp-channels"></div>
     <label class="field"><span>账单文件（.csv / .txt / 微信加密 .zip）</span>
       <input class="input" type="file" id="imp-file" accept=".csv,.txt,.zip"></label>
-    <div class="modal-cols">
-      <label class="field"><span>压缩包密码（只有微信 zip 要填）</span>
-        <input class="input" type="text" id="imp-zip" placeholder="微信「账单下载」通知里那串"></label>
-      <label class="field"><span>没匹配到规则的账户</span>
-        <select class="input" id="imp-account">
-          ${state.accounts.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}
-        </select></label>
-    </div>
+    <label class="field"><span>压缩包密码（只有微信 zip 要填）</span>
+      <input class="input" type="text" id="imp-zip" placeholder="微信「账单下载」通知里那串"></label>
     <div id="imp-preview"></div>
     <button class="btn primary block" id="imp-go" disabled>确认导入</button>
     <div id="imp-rules" class="imp-rules-wrap"></div>
@@ -482,7 +563,6 @@ async function openImport() {
       impState.file = e.target.files[0] || null;
       if (impState.file) previewImport();
     });
-    $('#imp-account', root).addEventListener('change', () => { if (impState.file) previewImport(); });
     $('#imp-zip', root).addEventListener('change', () => { if (impState.file) previewImport(); });
     $('#imp-go', root).addEventListener('click', doImport);
     $('#modal-card').classList.add('is-wide');
@@ -546,23 +626,13 @@ async function renderImportChannels() {
   });
 }
 
-// 支付方式映射规则 + 最近批次（可撤销）
+// 最近导入批次（可整批撤销）
 async function renderImportRules() {
   const host = $('#imp-rules');
   if (!host) return;
   const s = impState.sources || await refreshImportSources();
   if (!s) { host.innerHTML = ''; return; }
-  const rules = s.payee_rules || [];
   const batches = s.batches || [];
-
-  const ruleHtml = rules.length ? rules.map((r) => `
-    <div class="imp-rule">
-      <span class="imp-rule-pat">${esc(r.pattern)}</span>
-      <span class="arrow">→</span>
-      <span class="imp-rule-acc">${esc(r.account_name || '')}</span>
-      ${r.source ? `<span class="tag">${esc(r.source)}</span>` : ''}
-      <button class="btn tiny danger" data-del-payee="${r.id}">删除</button>
-    </div>`).join('') : '<div class="empty">还没有映射规则</div>';
 
   const batchHtml = batches.length ? batches.slice(0, 5).map((b) => `
     <div class="imp-batch">
@@ -571,18 +641,10 @@ async function renderImportRules() {
       <button class="btn tiny danger" data-del-batch="${esc(b.batch)}">撤销</button>
     </div>`).join('') : '';
 
-  host.innerHTML = `
-    <div class="imp-section-title">支付方式 → 账户 映射</div>
-    <div class="imp-rule-grid">${ruleHtml}</div>
-    ${batchHtml ? '<div class="imp-section-title">最近导入批次</div><div class="imp-rule-grid">' + batchHtml + '</div>' : ''}`;
+  host.innerHTML = batchHtml
+    ? '<div class="imp-section-title">最近导入批次</div><div class="imp-rule-grid">' + batchHtml + '</div>'
+    : '';
 
-  host.querySelectorAll('[data-del-payee]').forEach((btn) => btn.addEventListener('click', async () => {
-    await api('/api/payee-rules/' + btn.dataset.delPayee, { method: 'DELETE' });
-    toast('规则已删除');
-    await refreshImportSources();
-    await renderImportRules();
-    if (impState.file) previewImport();
-  }));
   host.querySelectorAll('[data-del-batch]').forEach((btn) => btn.addEventListener('click', async () => {
     if (!confirm('撤销这次导入？对应的流水会被删掉。')) return;
     try {
@@ -590,7 +652,7 @@ async function renderImportRules() {
       toast(`已撤销 ${r.removed} 笔`);
       await refreshImportSources();
       await renderImportRules();
-      await loadOverview();
+      await loadMonthSummary();
       if (currentView() === 'transactions') loadTransactions();
     } catch (err) { toast(err.message, true); }
   }));
@@ -601,7 +663,6 @@ async function previewImport() {
   if (!file) return;
   const form = new FormData();
   form.append('file', file);
-  form.append('account_id', $('#imp-account').value);
   form.append('zip_password', ($('#imp-zip') && $('#imp-zip').value) || '');
   const box = $('#imp-preview');
   box.innerHTML = '<p class="hint">解析中…</p>';
@@ -614,11 +675,6 @@ async function previewImport() {
     impState.preview = null;
     box.innerHTML = `<p class="hint neg">${esc(err.message)}</p>`;
   }
-}
-
-function impAccountOptions(selectedId) {
-  return state.accounts.map((a) =>
-    `<option value="${a.id}"${a.id === selectedId ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
 }
 
 function renderImportPreview(res) {
@@ -635,23 +691,11 @@ function renderImportPreview(res) {
       <span class="ok">新增 <b>${s.new || 0}</b></span>
       ${s.duplicate ? `<span class="warn">重复 <b>${s.duplicate}</b></span>` : ''}
       ${s.skipped ? `<span class="muted">跳过 <b>${s.skipped}</b></span>` : ''}
-      ${s.no_account ? `<span class="neg">未定账户 <b>${s.no_account}</b></span>` : ''}
     </div>${warn}`;
 
   const rows = (res.rows || []).map((r, i) => impRowHtml(r, i)).join('');
-  const unmatched = s.unmatched_pay_methods || [];
-  const unmatchedHtml = unmatched.length ? `
-    <div class="imp-unmatched">
-      <div class="imp-unmatched-title">这些支付方式还没对应账户，选一个即可顺手记住：</div>
-      ${unmatched.map((pm) => `
-        <div class="imp-unmatched-row">
-          <span class="pm">${esc(pm)}</span>
-          <select class="input tiny-input" data-pm-acc>${impAccountOptions(null)}</select>
-          <button class="btn tiny" data-pm-remember>记住</button>
-        </div>`).join('')}
-    </div>` : '';
 
-  $('#imp-preview').innerHTML = head + unmatchedHtml
+  $('#imp-preview').innerHTML = head
     + `<div class="imp-rows">${rows || '<div class="empty">没有解析到可导入的流水</div>'}</div>`;
   bindImportPreviewEvents();
   updateImportGo();
@@ -663,7 +707,6 @@ function impRowHtml(r, i) {
   const disabled = isSkip || dup;
   const tag = dup ? '<span class="tag warn-tag">重复</span>'
     : isSkip ? '<span class="tag">不计收支</span>' : '';
-  const byRule = r.account_by ? `<span class="imp-by" title="由映射规则自动归属">规则「${esc(r.account_by)}」</span>` : '';
   const pay = r.pay_method ? `<span class="imp-pay">${esc(r.pay_method)}</span>` : '';
   const note = r.note || r.counterparty || '';
   const sign = r.type === 'in' ? '收' : r.type === 'out' ? '支' : '·';
@@ -673,35 +716,12 @@ function impRowHtml(r, i) {
     <span class="imp-type ${r.type === 'in' ? 'pos' : r.type === 'out' ? 'neg' : ''}">${sign}</span>
     <span class="imp-note" title="${esc(note)}">${esc(note)} ${tag}${pay}</span>
     <span class="imp-amt ${r.type === 'in' ? 'pos' : r.type === 'out' ? 'neg' : ''}">${fmt(r.amount)}</span>
-    <span class="imp-acct">${disabled ? '<span class="muted">跳过</span>'
-      : `<select class="input tiny-input" data-acct="${i}">${impAccountOptions(r.account_id)}</select>${byRule}`}</span>
   </div>`;
 }
 
 function bindImportPreviewEvents() {
   const box = $('#imp-preview');
   box.querySelectorAll('[data-check]').forEach((cb) => cb.addEventListener('change', updateImportGo));
-  box.querySelectorAll('[data-acct]').forEach((sel) => sel.addEventListener('change', () => {
-    const i = parseInt(sel.dataset.acct, 10);
-    if (impState.preview && impState.preview.rows[i]) {
-      impState.preview.rows[i].account_id = parseInt(sel.value, 10);
-    }
-    updateImportGo();
-  }));
-  box.querySelectorAll('[data-pm-remember]').forEach((btn) => btn.addEventListener('click', async () => {
-    const row = btn.closest('.imp-unmatched-row');
-    const pm = row.querySelector('.pm').textContent;
-    const accountId = parseInt(row.querySelector('select').value, 10);
-    if (!accountId) return;
-    try {
-      await api('/api/payee-rules', { method: 'POST', body: { pattern: pm, account_id: accountId, priority: 50 } });
-      const acct = state.accounts.find((a) => a.id === accountId);
-      toast(`已记住：${pm} → ${acct ? acct.name : ''}`);
-      await refreshImportSources();
-      await renderImportRules();
-      await previewImport();
-    } catch (err) { toast(err.message, true); }
-  }));
 }
 
 function updateImportGo() {
@@ -711,7 +731,7 @@ function updateImportGo() {
     const cb = $('#imp-preview [data-check="' + i + '"]');
     const on = cb ? cb.checked : false;
     r.selected = on;
-    if (!on || !r.account_id) return;
+    if (!on) return;
     n += 1;
     if (r.type === 'in') sumIn += r.amount; else if (r.type === 'out') sumOut += r.amount;
   });
@@ -723,11 +743,10 @@ function updateImportGo() {
 
 async function doImport() {
   const rows = (impState.preview && impState.preview.rows) || [];
-  const payload = rows.filter((r) => r.selected && r.account_id && r.type !== 'skip').map((r) => ({
+  const payload = rows.filter((r) => r.selected && r.type !== 'skip').map((r) => ({
     date: r.date,
     type: r.type,
     amount: r.amount,
-    account_id: r.account_id,
     category_id: r.category_id || null,
     note: r.note || '',
     external_id: r.external_id || null,
@@ -746,7 +765,7 @@ async function doImport() {
     if (res.skipped) msg += `，重复跳过 ${res.skipped}`;
     if (res.failed) msg += `，失败 ${res.failed}`;
     toast(msg);
-    await loadOverview();
+    await loadMonthSummary();
     await reloadAll();
     if (currentView() === 'transactions') loadTransactions();
     // 再预览一次：刚导入的行会标成「重复」，方便接着传下一个文件
@@ -762,37 +781,23 @@ async function doImport() {
 
 async function loadHoldings() {
   const data = await api('/api/holdings');
-  const pnl = data.total_profit;
-  $('#holding-kpis').innerHTML = [
-    { label: '持仓市值', val: fmt0(data.total_market), sub: '' },
-    { label: '投入成本', val: fmt0(data.total_cost), sub: '' },
-    { label: '浮动盈亏', val: fmt0(pnl), sub: data.total_cost ? ((pnl / data.total_cost) * 100).toFixed(1) + '%' : '—', cls: cls(pnl) },
-    { label: '持仓数', val: data.items.length + ' 项', sub: '' },
-  ].map((k) => `<div class="stat"><div class="stat-label">${k.label}</div>
-      <div class="stat-val ${k.cls || ''}">${k.val}</div><div class="stat-sub">${esc(k.sub)}</div></div>`).join('');
-
   state.holdById = {};
   data.items.forEach((h) => { state.holdById[h.id] = h; });
-  $('#holding-body').innerHTML = data.items.length ? data.items.map((h) => `
-    <tr>
-      <td data-label="名称">${esc(h.name)}${h.code ? ` <span class="muted">${esc(h.code)}</span>` : ''}
-        ${h.market && h.market !== 'auto' ? `<span class="tag tiny-tag">${esc(h.market_label || h.market)}</span>` : ''}</td>
-      <td data-label="类型"><span class="tag">${esc(h.kind_label)}</span></td>
-      <td data-label="份额" class="num">${h.units}</td>
-      <td data-label="成本价" class="num">${h.cost_price}</td>
-      <td data-label="现价" class="num"><input class="input price-input" type="number" step="0.0001" value="${h.price}" data-price="${h.id}"></td>
-      <td data-label="市值" class="num">${fmt(h.market_value)}</td>
-      <td data-label="盈亏" class="num ${cls(h.profit)}">${fmt(h.profit)}<br><span class="muted" style="font-size:11px">${h.profit_pct.toFixed(2)}%</span></td>
-      <td data-label=""><div class="row-actions"><button class="btn tiny" data-edit-holding="${h.id}">编辑</button><button class="btn tiny danger" data-del-holding="${h.id}">删除</button></div></td>
-    </tr>`).join('') : '<tr><td colspan="8"><div class="empty">还没有持仓，点右上角新增</div></td></tr>';
+  renderHoldingsTable(data);
+}
 
-  const byKind = {};
-  data.items.forEach((h) => { byKind[h.kind_label] = (byKind[h.kind_label] || 0) + h.market_value; });
-  const total = data.total_market || 1;
-  const items = Object.entries(byKind).map(([name, amount]) => ({
-    name, amount, ratio: amount / total * 100,
-  })).sort((a, b) => b.amount - a.amount);
-  drawDonut($('#holding-donut'), $('#holding-legend'), items);
+// 投资页一次把市值曲线一起拉了，两块数据共用一次渲染
+async function loadInvestmentPage() {
+  try {
+    const [, pf] = await Promise.all([loadHoldings(), api('/api/portfolio')]);
+    state.portfolio = pf;
+  } catch (err) {
+    toast(err.message, true);
+    return;
+  }
+  renderPortfolioChart();
+  await loadPortfolioAiPanel();
+  refreshSyncNote();
 }
 
 // 场外基金：用户下单时填的是「金额」，不是份额。按申购金额 × 费率反推份额与含费成本价。
@@ -935,7 +940,7 @@ function openHoldingForm() {
         toast('已添加');
         closeModal();
         await loadHoldings();
-        await loadOverview();
+        await loadMonthSummary();
         refreshSyncNote();
       } catch (err) { toast(err.message, true); }
     });
@@ -982,7 +987,7 @@ function openHoldingEdit(h) {
         toast('已修改');
         closeModal();
         await loadHoldings();
-        await loadOverview();
+        await loadMonthSummary();
         refreshSyncNote();
       } catch (err) { toast(err.message, true); }
     });
@@ -994,7 +999,7 @@ async function savePrice(id, price) {
     await api(`/api/holdings/${id}/price`, { method: 'POST', body: { price } });
     toast('价格已更新');
     await loadHoldings();
-    await loadOverview();
+    await loadMonthSummary();
   } catch (err) { toast(err.message, true); }
 }
 
@@ -1028,7 +1033,7 @@ async function refreshQuotes() {
       toast(`已更新 ${r.ok} 条持仓价格`);
     }
     await loadHoldings();
-    await loadOverview();
+    await loadMonthSummary();
     await refreshSyncNote();
   } catch (err) {
     toast(err.message, true);
@@ -1155,18 +1160,6 @@ function openBudgetForm() {
 /* ---------------- 设置 ---------------- */
 
 async function renderSettings() {
-  $('#account-body').innerHTML = state.accounts.length ? state.accounts.map((a) => `
-    <tr>
-      <td data-label="名称">${esc(a.name)}</td>
-      <td data-label="类型"><span class="tag">${esc(a.kind_label)}</span></td>
-      <td data-label="当前余额" class="num ${a.is_liability ? 'neg' : ''}">${fmt(a.balance)}</td>
-      <td data-label="基准" class="num muted">${fmt0(a.base_balance)}<br><span style="font-size:11px">${a.base_date || ''}</span></td>
-      <td data-label=""><div class="row-actions">
-        <button class="btn tiny" data-校准="${a.id}" data-name="${esc(a.name)}" data-balance="${a.balance}" data-liability="${a.is_liability ? 1 : 0}">校准</button>
-        <button class="btn tiny danger" data-del-account="${a.id}">删除</button>
-      </div></td>
-    </tr>`).join('') : '<tr><td colspan="5"><div class="empty">还没有账户，先建一个</div></td></tr>';
-
   $('#rule-list').innerHTML = state.rules.length ? state.rules.map((r) => `
     <div class="rule-item">
       <span><span class="kw">${esc(r.keyword)}</span> <span class="arrow">→</span> ${esc(r.category_name || '')}</span>
@@ -1179,6 +1172,7 @@ async function renderSettings() {
       <button data-del-cat="${c.id}" title="删除">×</button></span>`).join('');
 
   $('#db-path').textContent = 'data/assetbook.db';
+  await renderBudgets();
 }
 
 async function renderAiSettings() {
@@ -1261,41 +1255,6 @@ async function saveAiSettings() {
     toast('AI 配置已保存');
     await renderAiSettings();
   } catch (err) { toast(err.message, true); }
-}
-
-function openAccountForm() {
-  openModal('新增账户', `
-    <div class="modal-cols">
-      <label class="field"><span>名称</span><input class="input" id="a-name" placeholder="招商银行"></label>
-      <label class="field"><span>类型</span><select class="input" id="a-kind">
-        <option value="bank">银行卡</option><option value="payment">支付账户（支付宝/微信）</option>
-        <option value="cash">现金</option><option value="broker">券商</option>
-        <option value="credit">信用卡（算负债）</option><option value="loan">贷款（算负债）</option>
-        <option value="other">其他</option>
-      </select></label>
-      <label class="field"><span>当前余额</span><input class="input" type="number" step="0.01" id="a-balance" value="0"></label>
-      <label class="field"><span>日期</span><input class="input" type="date" id="a-date" value="${today()}"></label>
-    </div>
-    <button class="btn primary block" id="a-save">保存</button>
-  `, () => {
-    $('#a-save').addEventListener('click', async () => {
-      try {
-        await api('/api/accounts', {
-          method: 'POST',
-          body: {
-            name: $('#a-name').value.trim(),
-            kind: $('#a-kind').value,
-            base_balance: parseFloat($('#a-balance').value) || 0,
-            base_date: $('#a-date').value || today(),
-          },
-        });
-        toast('账户已创建');
-        closeModal();
-        await reloadAll();
-        renderSettings();
-      } catch (err) { toast(err.message, true); }
-    });
-  });
 }
 
 function openRuleForm() {
@@ -1433,36 +1392,32 @@ function bind() {
     const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark' : (sys === 'dark' ? 'light' : 'dark');
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('theme', next);
-    if (state.view === 'overview') renderOverview();
   });
   $('#logout-btn').addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
     location.reload();
   });
 
-  $('#nw-range').addEventListener('click', (e) => {
+  $('#pf-range').addEventListener('click', (e) => {
     const b = e.target.closest('.seg-btn');
     if (!b) return;
-    state.nwRange = b.dataset.range;
-    $$('#nw-range .seg-btn').forEach((x) => x.classList.toggle('is-on', x === b));
-    renderOverview();
+    state.pfRange = b.dataset.range;
+    $$('#pf-range .seg-btn').forEach((x) => x.classList.toggle('is-on', x === b));
+    renderPortfolioChart();
   });
 
   // 记账
   const txForm = $('#tx-form');
   txForm.date.value = today();
   txForm.addEventListener('submit', submitTx);
-  $('#tx-type').addEventListener('change', (e) => {
-    $('#tx-to-wrap').hidden = e.target.value !== 'transfer';
-  });
   $('#import-btn').addEventListener('click', openImport);
-  ['#f-q', '#f-type', '#f-account', '#f-month'].forEach((sel) => {
+  ['#f-q', '#f-type', '#f-month'].forEach((sel) => {
     let timer;
     $(sel).addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { state.tx.page = 0; loadTransactions(); }, 220); });
     $(sel).addEventListener('change', () => { state.tx.page = 0; loadTransactions(); });
   });
   $('#f-reset').addEventListener('click', () => {
-    $('#f-q').value = ''; $('#f-type').value = ''; $('#f-account').value = ''; $('#f-month').value = '';
+    $('#f-q').value = ''; $('#f-type').value = ''; $('#f-month').value = '';
     state.tx.page = 0; loadTransactions();
   });
   $('#page-prev').addEventListener('click', () => { if (state.tx.page > 0) { state.tx.page--; loadTransactions(); } });
@@ -1475,34 +1430,18 @@ function bind() {
     if (!confirm('删掉这条流水？')) return;
     await api('/api/transactions/' + id, { method: 'DELETE' });
     toast('已删除');
-    await loadOverview();
+    await loadMonthSummary();
     await loadTransactions();
   });
 
   // 持仓
   $('#holding-add').addEventListener('click', openHoldingForm);
-  $('#holding-body').addEventListener('change', (e) => {
-    const id = e.target.dataset.price;
-    if (id) savePrice(id, parseFloat(e.target.value) || 0);
-  });
-  $('#holding-body').addEventListener('click', async (e) => {
-    const hid = e.target.dataset.editHolding;
-    if (hid) { openHoldingEdit(state.holdById[hid]); return; }
-    const id = e.target.dataset.delHolding;
-    if (!id) return;
-    if (!confirm('删除这个持仓？')) return;
-    await api('/api/holdings/' + id, { method: 'DELETE' });
-    toast('已删除');
-    await loadHoldings();
-    await loadOverview();
-  });
 
   // 预算
   $('#budget-add').addEventListener('click', openBudgetForm);
   $('#budget-month').addEventListener('change', renderBudgets);
 
   // 设置
-  $('#account-add').addEventListener('click', openAccountForm);
   $('#rule-add').addEventListener('click', openRuleForm);
   $('#category-add').addEventListener('click', openCategoryForm);
   $('#ai-save').addEventListener('click', saveAiSettings);
@@ -1524,32 +1463,6 @@ function bind() {
       toast('Key 已清除');
       await renderAiSettings();
     } catch (err) { toast(err.message, true); }
-  });
-  $('#account-body').addEventListener('click', async (e) => {
-    const cal = e.target.dataset['校准'];
-    if (cal) {
-      const name = e.target.dataset.name;
-      const isLiability = e.target.dataset.liability === '1';
-      const cur = parseFloat(e.target.dataset.balance) || 0;
-      const ask = isLiability
-        ? `「${name}」现在还欠多少？（当前欠 ${fmt0(Math.abs(cur))}）`
-        : `把「${name}」的余额校准成多少？（当前 ${fmt0(cur)}）`;
-      const input = prompt(ask, String(isLiability ? Math.abs(cur) : cur));
-      if (input === null) return;
-      await api(`/api/accounts/${cal}/snapshot`, { method: 'POST', body: { balance: parseFloat(input) || 0 } });
-      toast('已校准');
-      await reloadAll();
-      renderSettings();
-      return;
-    }
-    const del = e.target.dataset.delAccount;
-    if (del) {
-      if (!confirm('删除账户会连带删掉它的流水，确定？')) return;
-      await api('/api/accounts/' + del, { method: 'DELETE' });
-      toast('已删除');
-      await reloadAll();
-      renderSettings();
-    }
   });
   $('#rule-list').addEventListener('click', async (e) => {
     const id = e.target.dataset.delRule;
@@ -1580,8 +1493,9 @@ function bind() {
   // 行情刷新
   $('#refresh-quotes').addEventListener('click', refreshQuotes);
 
-  // AI 财务分析：已有结果时再点就是强制重新生成
-  $('#ai-run').addEventListener('click', () => runAiAnalyze(!!(state.ai && state.ai.insight)));
+  // AI 分析：已有结果时再点就是强制重新生成
+  $('#ai-run').addEventListener('click', () => runAiAnalyze(!!(state.ai && state.ai.spending)));
+  $('#pai-run').addEventListener('click', () => runPortfolioAi(!!(state.ai && state.ai.portfolio)));
 
   // 自动同步
   $('#auto-save').addEventListener('click', saveAutoSettings);
@@ -1606,10 +1520,23 @@ function bind() {
       const r = await api('/api/auto/run/inbox', { method: 'POST' });
       toast(r.seen ? `处理 ${r.seen} 个文件，新增 ${r.imported} 笔` : '收件目录里没有新文件');
       await renderAutoPanel();
-      await loadOverview();
+      await loadMonthSummary();
     } catch (err) { toast(err.message, true); } finally {
       btn.disabled = false;
       btn.textContent = '扫收件目录';
+    }
+  });
+
+  $('#auto-run-portfolio').addEventListener('click', async () => {
+    const btn = $('#auto-run-portfolio');
+    btn.disabled = true;
+    try {
+      await api('/api/portfolio/snapshot', { method: 'POST' });
+      toast('已记录今天的市值快照');
+      await renderAutoPanel();
+      if (state.view === 'holdings') await loadInvestmentPage();
+    } catch (err) { toast(err.message, true); } finally {
+      btn.disabled = false;
     }
   });
 

@@ -8,6 +8,7 @@ import ai
 import db
 import insights
 import jev
+import portfolio_analysis
 import quotes
 import scheduler as sched
 import security
@@ -22,11 +23,10 @@ router = APIRouter(prefix="/api", tags=["assets"], dependencies=[Depends(securit
 
 @router.get("/meta")
 def meta():
-    """前端下拉要用的枚举：市场、账户类型、持仓类型。"""
+    """前端下拉要用的枚举：市场、持仓类型。"""
     return {
         "markets": [{"value": k, "label": v} for k, v in quotes.MARKETS.items()],
         "holding_kinds": svc.HOLDING_LABELS,
-        "account_kinds": svc.ACCOUNT_LABELS,
     }
 
 
@@ -37,13 +37,11 @@ def overview():
     s = svc.compute_summary()
     return {
         **s,
-        "accounts": svc.accounts_with_balance(),
         "allocation": svc.allocation(),
         "month_categories": svc.month_category_spend(s["month"]),
-        "networth_30d": svc.networth_series_30d(),
-        "networth_12m": svc.networth_series_months(12),
+        "portfolio_30d": svc.portfolio_series_30d(),
+        "portfolio_12m": svc.portfolio_series_months(12),
         "top_holdings": sorted(svc.holdings_with_value(), key=lambda h: -h["market_value"])[:5],
-        "rates": svc.get_rates(auto_fetch=False),
         "auto": {"enabled": sched.scheduler.status()["enabled"],
                  "last_quote_at": sched.scheduler.status()["last_quote_at"]},
     }
@@ -78,12 +76,12 @@ def create_holding(payload: HoldingIn):
             pass
 
     cur = db.execute(
-        "INSERT INTO holdings (code, name, kind, market, account_id, units, cost_price, "
-        "price, price_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (payload.code, name, payload.kind, payload.market, payload.account_id, payload.units,
+        "INSERT INTO holdings (code, name, kind, market, units, cost_price, "
+        "price, price_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (payload.code, name, payload.kind, payload.market, payload.units,
          payload.cost_price, price or payload.cost_price, price_date or svc.today(), payload.note),
     )
-    db.snapshot_networth()
+    db.snapshot_portfolio()
     return {"id": cur.lastrowid}
 
 
@@ -98,7 +96,7 @@ def update_holding(holding_id: int, payload: HoldingPatch):
         return {"ok": True}
     sets = ", ".join(f"{k} = ?" for k in fields)
     db.execute(f"UPDATE holdings SET {sets} WHERE id = ?", (*fields.values(), holding_id))
-    db.snapshot_networth()
+    db.snapshot_portfolio()
     return {"ok": True}
 
 
@@ -124,14 +122,14 @@ def update_price(holding_id: int, payload: PriceIn):
         "UPDATE holdings SET price = ?, price_date = ? WHERE id = ?",
         (price, pdate, holding_id),
     )
-    db.snapshot_networth()
+    db.snapshot_portfolio()
     return {"ok": True, "price": price, "price_date": pdate}
 
 
 @router.delete("/holdings/{holding_id}", status_code=204)
 def delete_holding(holding_id: int):
     db.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
-    db.snapshot_networth()
+    db.snapshot_portfolio()
     return None
 
 
@@ -204,9 +202,9 @@ def auto_settings(payload: AutoSyncIn):
 
 @router.post("/auto/run/{what}")
 async def auto_run(what: str):
-    if what not in ("quotes", "rates", "networth", "inbox", "mail"):
+    if what not in ("quotes", "rates", "portfolio", "inbox", "mail"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "只支持 quotes / rates / networth / inbox / mail")
+                            "只支持 quotes / rates / portfolio / inbox / mail")
     return await sched.scheduler.run_now(what)
 
 
@@ -218,7 +216,8 @@ def ai_settings():
     return {
         **ai.public(),
         "jev": jev.public(),
-        "insight": insights.cached(),
+        "spending": insights.cached(),
+        "portfolio": portfolio_analysis.cached(),
     }
 
 
@@ -238,9 +237,20 @@ def ai_settings_save(payload: AiSettingsIn):
 
 @router.post("/ai/analyze")
 def ai_analyze(payload: AnalyzeIn):
-    """生成财务分析。默认命中当月缓存就直接返回，force=True 才重新烧一次。"""
+    """生成记账分析。默认命中当月缓存就直接返回，force=True 才重新烧一次。"""
     try:
-        return insights.analyze(month=payload.month, force=payload.force)
+        return insights.spending_analyze(month=payload.month, force=payload.force)
+    except ai.AIError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    except Exception as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"生成失败：{e}") from e
+
+
+@router.post("/ai/portfolio-analyze")
+def ai_portfolio_analyze(payload: AnalyzeIn):
+    """生成持仓分析：逐只给出加仓 / 持有 / 减仓。"""
+    try:
+        return portfolio_analysis.analyze(force=payload.force)
     except ai.AIError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     except Exception as e:
@@ -249,8 +259,14 @@ def ai_analyze(payload: AnalyzeIn):
 
 @router.get("/ai/snapshot")
 def ai_snapshot(month: str | None = None):
-    """给模型看的那份数据包长什么样 —— 方便自查分析是不是基于真实数字。"""
+    """给模型看的那份记账数据包 —— 方便自查分析是不是基于真实数字。"""
     return insights.snapshot(month)
+
+
+@router.get("/ai/portfolio-snapshot")
+def ai_portfolio_snapshot():
+    """给模型看的那份持仓数据包，含每只标的的区间涨跌幅。"""
+    return portfolio_analysis.snapshot()
 
 
 # ---------- Jev 快通道（决策模型，负责自动分类这类判断） ----------
@@ -310,13 +326,15 @@ def delete_budget(budget_id: int):
     return None
 
 
-# ---------- 净值与报表 ----------
+# ---------- 投资曲线与报表 ----------
 
-@router.get("/networth")
-def networth(days: int = 30, months: int = 12):
+@router.get("/portfolio")
+def portfolio(days: int = 30, months: int = 12):
     return {
-        "daily": svc.networth_series_30d() if days else [],
-        "monthly": svc.networth_series_months(months),
+        "daily": svc.portfolio_series_30d() if days else [],
+        "monthly": svc.portfolio_series_months(months),
+        "totals": svc.holdings_totals(),
+        "by_kind": svc.holdings_by_kind(),
     }
 
 
@@ -325,9 +343,9 @@ def reports(months: int = 12):
     return {"items": svc.monthly_report(months)}
 
 
-@router.post("/networth/snapshot")
+@router.post("/portfolio/snapshot")
 def take_snapshot():
-    db.snapshot_networth()
+    db.snapshot_portfolio()
     return {"ok": True}
 
 

@@ -2,7 +2,7 @@
 
 五件事：
   1. 定时刷新持仓现价（场外基金净值一天只更新一次，所以间隔不用太密）
-  2. 每天定时把当天的资产/负债/净值落到 networth 表，攒出长期曲线
+  2. 每天定时把当天的投资市值落到 portfolio_history 表，攒出长期曲线
   3. 顺带定时刷新汇率
   4. 定时扫 data/inbox/ 收件目录，把丢进去的账单自动入库
   5. 定时去 IMAP 邮箱收账单附件（配了才跑）
@@ -223,11 +223,11 @@ class Scheduler:
         if datetime.now().hour < hour and self.last_snapshot_date is not None:
             return
         try:
-            db.snapshot_networth()
+            db.snapshot_portfolio()
             self.last_snapshot_date = today
-            self._note("networth", f"已记录 {today} 的净值快照")
+            self._note("portfolio", f"已记录 {today} 的投资市值快照")
         except Exception as e:                          # noqa: BLE001
-            self._note("networth", f"净值快照失败：{e}", "warn")
+            self._note("portfolio", f"投资快照失败：{e}", "warn")
 
     # ---------------- 手动触发 ----------------
 
@@ -238,10 +238,10 @@ class Scheduler:
         if what == "rates":
             await self._do_rates()
             return {"ok": True}
-        if what == "networth":
-            db.snapshot_networth()
+        if what == "portfolio":
+            db.snapshot_portfolio()
             self.last_snapshot_date = datetime.now().date().isoformat()
-            self._note("networth", "手动记录了净值快照")
+            self._note("portfolio", "手动记录了投资市值快照")
             return {"ok": True}
         if what == "inbox":
             import intake

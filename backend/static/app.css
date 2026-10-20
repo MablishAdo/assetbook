@@ -614,3 +614,24 @@ code { font: 12px/1.4 var(--mono); background: var(--accent-soft); padding: 1px 
   .shell { grid-template-columns: minmax(0, 1fr); }
   .panel { box-shadow: none; break-inside: avoid; }
 }
+
+/* 持仓名称列：基金名很长（如「易方达中证红利低波动ETF联接发起式A」），
+   不给宽度会被挤成竖排。给最小宽度 + 正常换行。 */
+#holding-table td:first-child {
+  min-width: 172px;
+}
+.h-name {
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.h-code {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* 持仓分析里「加仓 / 持有 / 减仓」三档结论上色，一眼扫到 */
+.ai-md .ai-h3.act-add { color: var(--accent); }
+.ai-md .ai-h3.act-hold { color: var(--muted); }
+.ai-md .ai-h3.act-cut  { color: var(--neg); }
+.ai-md .ai-h3 { font-size: 14px; margin-top: 14px; }

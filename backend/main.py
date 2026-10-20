@@ -1,4 +1,4 @@
-"""AssetBook · 资产管理与记账系统 —— 应用入口。
+"""AssetBook · 记账与投资 —— 应用入口。
 
 本地开发：
     uvicorn main:app --reload --app-dir backend
@@ -21,7 +21,7 @@ import db
 import scheduler
 from routes import assets, auth, data
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "2.0.0"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -36,7 +36,7 @@ async def lifespan(_: FastAPI):
 
         if not security.has_password():
             security.set_password(preset)
-    db.snapshot_networth()
+    db.snapshot_portfolio()
     scheduler.scheduler.start()
     try:
         yield
@@ -46,7 +46,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="AssetBook API",
-    description="资产管理与记账系统 · 自托管 · 数据完全归你",
+    description="记账与投资 · 自托管 · 数据完全归你",
     version=APP_VERSION,
     docs_url="/api/docs",
     redoc_url=None,

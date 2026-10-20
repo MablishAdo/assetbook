@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1c6b52">
-  <title>AssetBook · 资产账本</title>
+  <title>AssetBook · 记账与投资</title>
   <link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/static/app.css?v=__ASSETBOOK_VERSION__">
 </head>
@@ -17,7 +17,7 @@
       <span class="logo">AB</span>
       <div>
         <strong>AssetBook</strong>
-        <span>资产管理与记账系统</span>
+        <span>记账与投资</span>
       </div>
     </div>
 
@@ -46,15 +46,13 @@
       <span class="logo">AB</span>
       <div>
         <strong>AssetBook</strong>
-        <span>资产账本</span>
+        <span>记账与投资</span>
       </div>
     </div>
 
     <nav class="nav" id="nav">
-      <button data-view="overview"     class="nav-item">概览</button>
       <button data-view="transactions" class="nav-item">记账</button>
-      <button data-view="holdings"     class="nav-item">持仓</button>
-      <button data-view="budgets"      class="nav-item">预算</button>
+      <button data-view="holdings"     class="nav-item">投资</button>
       <button data-view="settings"     class="nav-item">设置</button>
     </nav>
 
@@ -74,25 +72,24 @@
       </div>
     </header>
 
-    <!-- ========== 概览 ========== -->
-    <section class="view" data-view="overview">
-
+    <!-- ========== 记账 ========== -->
+    <section class="view" data-view="transactions" hidden>
       <div class="panel statement">
         <div class="statement-main">
-          <div class="label">净资产 · Net Worth</div>
-          <div class="val" id="ov-net">¥0</div>
+          <div class="label">本月结余</div>
+          <div class="val" id="tx-net">¥0</div>
         </div>
         <div class="statement-side">
-          <div class="row"><span>总资产</span><strong id="ov-assets">¥0</strong></div>
-          <div class="row"><span>总负债</span><strong id="ov-liab">¥0</strong></div>
-          <div class="row"><span>投资市值</span><strong id="ov-invest">¥0</strong></div>
+          <div class="row"><span>本月收入</span><strong id="tx-income">¥0</strong></div>
+          <div class="row"><span>本月支出</span><strong id="tx-expense">¥0</strong></div>
+          <div class="row"><span>储蓄率</span><strong id="tx-rate">—</strong></div>
         </div>
-        <div class="stats" id="ov-kpis"></div>
+        <div class="stats" id="tx-kpis"></div>
       </div>
 
       <div class="panel">
         <div class="panel-head">
-          <h2><i>01</i>AI 财务分析</h2>
+          <h2><i>01</i>AI 记账分析</h2>
           <div class="head-actions">
             <span class="ai-when" id="ai-when"></span>
             <button class="btn primary" id="ai-run" type="button">生成分析</button>
@@ -101,54 +98,8 @@
         <div id="ai-body" class="ai-body"></div>
       </div>
 
-      <div class="cols">
-        <div class="col-main">
-          <div class="panel">
-            <div class="panel-head">
-              <h2><i>02</i>净值走势</h2>
-              <div class="seg" id="nw-range">
-                <button class="seg-btn is-on" data-range="30">30 天</button>
-                <button class="seg-btn" data-range="12">12 个月</button>
-              </div>
-            </div>
-            <div class="chart-box">
-              <svg id="nw-chart" viewBox="0 0 800 240" preserveAspectRatio="none"></svg>
-            </div>
-            <div class="chart-foot" id="nw-foot"></div>
-          </div>
-
-          <div class="panel">
-            <h2><i>03</i>本月支出 · 分类</h2>
-            <div id="ov-cats" class="cat-bars"></div>
-          </div>
-        </div>
-
-        <div class="col-side">
-          <div class="panel">
-            <h2><i>04</i>资产配置</h2>
-            <div class="donut-row">
-              <svg id="alloc-donut" viewBox="0 0 200 200"></svg>
-              <div class="legend" id="alloc-legend"></div>
-            </div>
-          </div>
-
-          <div class="panel">
-            <h2><i>05</i>账户</h2>
-            <div id="ov-accounts" class="acct-list"></div>
-          </div>
-
-          <div class="panel">
-            <h2><i>06</i>最近流水</h2>
-            <div id="ov-recent" class="mini-list"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ========== 记账 ========== -->
-    <section class="view" data-view="transactions" hidden>
       <div class="panel">
-        <h2><i>01</i>记一笔</h2>
+        <h2><i>02</i>记一笔</h2>
         <form id="tx-form" class="quick-form">
           <label class="field">
             <span>日期</span>
@@ -159,20 +110,11 @@
             <select class="input" name="type" id="tx-type">
               <option value="out">支出</option>
               <option value="in">收入</option>
-              <option value="transfer">转账</option>
             </select>
           </label>
           <label class="field">
             <span>金额</span>
             <input class="input" type="number" step="0.01" min="0" name="amount" placeholder="0.00" required>
-          </label>
-          <label class="field">
-            <span>账户</span>
-            <select class="input" name="account_id" id="tx-account" required></select>
-          </label>
-          <label class="field" id="tx-to-wrap" hidden>
-            <span>转入</span>
-            <select class="input" name="to_account_id" id="tx-to"></select>
           </label>
           <label class="field">
             <span>分类</span>
@@ -191,7 +133,7 @@
 
       <div class="panel">
         <div class="panel-head">
-          <h2><i>02</i>流水明细</h2>
+          <h2><i>03</i>流水明细</h2>
           <div class="head-actions">
             <button class="btn" id="import-btn" type="button">导入账单</button>
             <a class="btn ghost" href="/api/export/transactions.csv">导出 CSV</a>
@@ -204,9 +146,7 @@
             <option value="">全部类型</option>
             <option value="out">支出</option>
             <option value="in">收入</option>
-            <option value="transfer">转账</option>
           </select>
-          <select class="input" id="f-account"><option value="">全部账户</option></select>
           <input class="input" id="f-month" type="month">
           <button class="btn ghost" id="f-reset" type="button">清空</button>
           <span class="count" id="f-count"></span>
@@ -216,7 +156,7 @@
           <table class="table responsive" id="tx-table">
             <thead>
               <tr>
-                <th>日期</th><th>类型</th><th>账户</th><th>分类</th><th class="num">金额</th>
+                <th>日期</th><th>类型</th><th>分类</th><th class="num">金额</th>
                 <th>备注</th><th></th>
               </tr>
             </thead>
@@ -231,26 +171,50 @@
       </div>
     </section>
 
-    <!-- ========== 持仓 ========== -->
+    <!-- ========== 投资 ========== -->
     <section class="view" data-view="holdings" hidden>
+      <div class="panel statement">
+        <div class="statement-main">
+          <div class="label">投资市值</div>
+          <div class="val" id="hd-market">¥0</div>
+        </div>
+        <div class="statement-side">
+          <div class="row"><span>总成本</span><strong id="hd-cost">¥0</strong></div>
+          <div class="row"><span>总盈亏</span><strong id="hd-profit">¥0</strong></div>
+          <div class="row"><span>盈亏率</span><strong id="hd-pct">—</strong></div>
+        </div>
+        <div class="stats" id="hd-kpis"></div>
+      </div>
+
       <div class="panel">
         <div class="panel-head">
-          <h2><i>01</i>持仓总览</h2>
-          <button class="btn primary" id="holding-add" type="button">新增持仓</button>
+          <h2><i>01</i>AI 持仓分析</h2>
+          <div class="head-actions">
+            <span class="ai-when" id="pai-when"></span>
+            <button class="btn primary" id="pai-run" type="button">生成分析</button>
+          </div>
         </div>
-        <div class="stats" id="holding-kpis"></div>
+        <p class="hint">
+          会先抓每只标的的近 1 月 / 3 月 / 6 月 / 1 年涨跌幅，再连同占比、盈亏一起交给模型，
+          逐只给出「加仓 / 持有 / 减仓」和具体操作。
+        </p>
+        <div id="pai-body" class="ai-body"></div>
       </div>
 
       <div class="cols">
         <div class="col-main">
           <div class="panel">
-            <h2><i>02</i>持仓明细</h2>
+            <div class="panel-head">
+              <h2><i>02</i>持仓明细</h2>
+              <button class="btn primary" id="holding-add" type="button">新增持仓</button>
+            </div>
             <div class="table-wrap">
               <table class="table responsive" id="holding-table">
                 <thead>
                   <tr>
                     <th>名称</th><th>类型</th><th class="num">份额</th><th class="num">成本价</th>
-                    <th class="num">现价</th><th class="num">市值</th><th class="num">盈亏</th><th></th>
+                    <th class="num">现价</th><th class="num">市值</th><th class="num">占比</th>
+                    <th class="num">盈亏</th><th></th>
                   </tr>
                 </thead>
                 <tbody id="holding-body"></tbody>
@@ -261,32 +225,27 @@
         </div>
         <div class="col-side">
           <div class="panel">
-            <h2><i>03</i>持仓分布</h2>
+            <h2><i>03</i>品种分布</h2>
             <div class="donut-row">
               <svg id="holding-donut" viewBox="0 0 200 200"></svg>
               <div class="legend" id="holding-legend"></div>
             </div>
           </div>
-        </div>
-      </div>
-    </section>
 
-    <!-- ========== 预算 ========== -->
-    <section class="view" data-view="budgets" hidden>
-      <div class="panel">
-        <div class="panel-head">
-          <h2><i>01</i>月度预算</h2>
-          <div class="head-actions">
-            <input class="input" id="budget-month" type="month">
-            <button class="btn primary" id="budget-add" type="button">设置预算</button>
+          <div class="panel">
+            <div class="panel-head">
+              <h2><i>04</i>市值走势</h2>
+              <div class="seg" id="pf-range">
+                <button class="seg-btn is-on" data-range="30">30 天</button>
+                <button class="seg-btn" data-range="12">12 个月</button>
+              </div>
+            </div>
+            <div class="chart-box">
+              <svg id="pf-chart" viewBox="0 0 800 240" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="chart-foot" id="pf-foot"></div>
           </div>
         </div>
-        <div id="budget-list" class="budget-list"></div>
-      </div>
-
-      <div class="panel">
-        <h2><i>02</i>近 12 个月收支</h2>
-        <div class="bar-chart" id="monthly-bars"></div>
       </div>
     </section>
 
@@ -296,24 +255,11 @@
         <div class="col-main">
           <div class="panel">
             <div class="panel-head">
-              <h2><i>01</i>账户</h2>
-              <button class="btn primary" id="account-add" type="button">新增账户</button>
-            </div>
-            <div class="table-wrap">
-              <table class="table responsive" id="account-table">
-                <thead><tr><th>名称</th><th>类型</th><th class="num">当前余额</th><th class="num">基准</th><th></th></tr></thead>
-                <tbody id="account-body"></tbody>
-              </table>
-            </div>
-            <p class="hint">余额 = 基准 + 之后的流水。跟银行对不上时，用「校准」把实际余额写成新基准。</p>
-          </div>
-
-          <div class="panel">
-            <div class="panel-head">
-              <h2><i>02</i>自动同步</h2>
+              <h2><i>01</i>自动同步</h2>
               <div class="head-actions">
                 <button class="btn ghost" id="auto-run-quotes" type="button">立即刷新行情</button>
                 <button class="btn ghost" id="auto-run-inbox" type="button">扫收件目录</button>
+              <button class="btn ghost" id="auto-run-portfolio" type="button">记录市值快照</button>
               </div>
             </div>
 
@@ -350,6 +296,7 @@
             <div class="auto-log" id="auto-log"></div>
             <p class="hint">
               行情来自腾讯 / 东方财富的公开接口，不需要填任何 Key。场外基金一天只更新一次净值，间隔设 30 分钟以上就够。<br>
+              「记录市值快照」把当天总市值存进 <code>portfolio_history</code>，攒出投资曲线。<br>
               账单自动收取见「记账 → 导入账单」：把支付宝 / 微信 / 银行导出的文件丢进收件目录，或配好
               <code>ASSETBOOK_IMAP_*</code> 环境变量后自动收邮件。
             </p>
@@ -357,7 +304,7 @@
 
           <div class="panel">
             <div class="panel-head">
-              <h2><i>03</i>AI 分析</h2>
+              <h2><i>02</i>AI 分析</h2>
               <span class="tag" id="ai-cfg-state">未配置</span>
             </div>
 
@@ -383,7 +330,8 @@
             <button class="btn primary block" id="ai-save" type="button">保存 AI 配置</button>
 
             <p class="hint">
-              填一次，两处都能用：① 记一笔时规则没命中的备注会再问一次模型；② 概览页的「AI 财务分析」。<br>
+              填一次，三处都能用：① 记一笔时规则没命中的备注会再问一次模型；
+              ② 记账页的「AI 记账分析」；③ 投资页的「AI 持仓分析」（逐只给加仓 / 减仓建议）。<br>
               常用搭配：DeepSeek <code>https://api.deepseek.com/v1</code> + <code>deepseek-chat</code>；
               OpenAI <code>https://api.openai.com/v1</code> + <code>gpt-4o-mini</code>；
               本地 Ollama <code>http://localhost:11434/v1</code> + <code>qwen2.5</code>（Key 随便填）。<br>
@@ -421,7 +369,7 @@
 
           <div class="panel">
             <div class="panel-head">
-              <h2><i>04</i>自动分类规则</h2>
+              <h2><i>03</i>自动分类规则</h2>
               <button class="btn primary" id="rule-add" type="button">新增规则</button>
             </div>
             <div class="rule-grid" id="rule-list"></div>
@@ -432,14 +380,30 @@
         <div class="col-side">
           <div class="panel">
             <div class="panel-head">
-              <h2><i>05</i>分类</h2>
+              <h2><i>04</i>分类</h2>
               <button class="btn primary" id="category-add" type="button">新增</button>
             </div>
             <div id="category-list" class="chip-list"></div>
           </div>
 
           <div class="panel">
-            <h2><i>06</i>安全</h2>
+            <div class="panel-head">
+              <h2><i>05</i>月度预算</h2>
+              <div class="head-actions">
+                <input class="input" id="budget-month" type="month">
+                <button class="btn primary" id="budget-add" type="button">设置预算</button>
+              </div>
+            </div>
+            <div id="budget-list" class="budget-list"></div>
+          </div>
+
+          <div class="panel">
+            <h2><i>06</i>近 12 个月收支</h2>
+            <div class="bar-chart" id="monthly-bars"></div>
+          </div>
+
+          <div class="panel">
+            <h2><i>05</i>安全</h2>
             <form id="password-form">
               <label class="field">
                 <span>新密码</span>
@@ -451,7 +415,7 @@
           </div>
 
           <div class="panel">
-            <h2><i>07</i>数据</h2>
+            <h2><i>06</i>数据</h2>
             <a class="btn ghost block" href="/api/export/transactions.csv">导出全部流水 CSV</a>
             <p class="hint">数据库文件：<code id="db-path">data/assetbook.db</code>。备份这个文件就等于备份全部账本。</p>
           </div>
