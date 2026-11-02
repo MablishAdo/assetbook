@@ -214,7 +214,7 @@ function renderHoldingsTable(data) {
       <td data-label="占比" class="num">${total ? (h.market_value / total * 100).toFixed(1) : '0.0'}%</td>
       <td data-label="盈亏" class="num ${cls(h.profit)}">${h.profit >= 0 ? '+' : ''}${fmt(h.profit)}<br><span class="muted" style="font-size:11px">${h.profit_pct.toFixed(2)}%</span></td>
       <td data-label=""><div class="row-actions"><button class="btn tiny" data-edit-holding="${h.id}">编辑</button><button class="btn tiny danger" data-del-holding="${h.id}">删除</button></div></td>
-    </tr>`).join('') : '<tr><td colspan="9"><div class="empty">还没有持仓。点右上角「新增持仓」，填个代码就能自动带出名称和现价。</div></td></tr>';
+    </tr>`).join('') : '<tr><td colspan="9"><div class="empty">还没有持仓。在上面那行输入「000001 买入 100 股 成本价 100」就能建；也可以点右上角「手动新增」逐项填。</div></td></tr>';
 
   const byKind = {};
   items.forEach((h) => { byKind[h.kind_label] = (byKind[h.kind_label] || 0) + h.market_value; });
@@ -831,7 +831,7 @@ function openHoldingForm() {
     fund: '基金', stock: '股票', bond: '债券', gold: '黄金', cash: '现金类', other: '其他',
   }).map(([v, label]) => `<option value="${v}">${esc(label)}</option>`).join('');
 
-  openModal('新增持仓', `
+  openModal('手动新增持仓', `
     <div class="modal-cols">
       <label class="field"><span>代码</span><input class="input" id="h-code" placeholder="510300 / 020602 / 00700 / BTC"></label>
       <label class="field"><span>市场</span><select class="input" id="h-market">${marketOpts}</select></label>
