@@ -71,6 +71,11 @@ class HoldingPatch(BaseModel):
     note: Optional[str] = None
 
 
+class TradeIn(BaseModel):
+    """一句话买卖：'000001 买入 100 股 成本价 100'。"""
+    text: str = Field(min_length=1, max_length=200)
+
+
 class AutoSyncIn(BaseModel):
     enabled: Optional[bool] = None
     quote_interval_min: Optional[int] = Field(default=None, ge=5, le=1440)

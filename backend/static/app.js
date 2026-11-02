@@ -796,7 +796,7 @@ async function loadInvestmentPage() {
     return;
   }
   renderPortfolioChart();
-  await loadPortfolioAiPanel();
+  await Promise.all([loadPortfolioAiPanel(), loadTrades()]);
   refreshSyncNote();
 }
 
@@ -1001,6 +1001,153 @@ async function savePrice(id, price) {
     await loadHoldings();
     await loadMonthSummary();
   } catch (err) { toast(err.message, true); }
+}
+
+/* ---------------- 快捷交易（一句话买卖） ---------------- */
+
+// 先预演，再让用户确认 —— 加仓合并会改成本价，不能闷头写库
+async function previewTrade(text) {
+  const hint = $('#trade-hint');
+  if (!text.trim()) { hint.className = 'hint'; hint.textContent = ''; return; }
+  try {
+    const p = await api('/api/holdings/trade/preview', {
+      method: 'POST', body: { text },
+    });
+    if (!p.ok) {
+      hint.className = 'hint neg';
+      hint.textContent = p.error + (p.hint ? '（' + p.hint + '）' : '');
+      return;
+    }
+    openTradePreview(text, p);
+  } catch (err) {
+    hint.className = 'hint neg';
+    hint.textContent = '解析失败：' + err.message;
+  }
+}
+
+function openTradePreview(text, p) {
+  const isBuy = p.side === 'buy';
+  const before = p.before;
+  const after = p.after;
+  const num = (n) => Number(n).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
+
+  const rows = [];
+  rows.push(`<div><div class="k">本次${isBuy ? '买入' : '卖出'}</div>
+    <div class="v">${num(p.units)} ${p.kind === 'fund' ? '份' : '股'} @ ${num(p.price)}</div></div>`);
+  rows.push(`<div><div class="k">成交金额</div><div class="v">¥${num(p.amount)}</div></div>`);
+
+  if (before) {
+    rows.push(`<div><div class="k">份额</div><div class="v">
+      ${num(before.units)} <span class="tp-arrow">→</span> <b>${num(after.units)}</b></div></div>`);
+    if (isBuy) {
+      rows.push(`<div><div class="k">成本价</div><div class="v">
+        ${num(before.cost_price)} <span class="tp-arrow">→</span> <b>${num(after.cost_price)}</b></div></div>`);
+    } else {
+      rows.push(`<div><div class="k">成本价</div><div class="v">${num(after.cost_price)}（卖出不改成本）</div></div>`);
+    }
+  } else {
+    rows.push(`<div><div class="k">操作</div><div class="v">新建持仓</div></div>`);
+    rows.push(`<div><div class="k">份额 / 成本价</div><div class="v">${num(after.units)} / ${num(after.cost_price)}</div></div>`);
+  }
+
+  if (!isBuy && p.realized) {
+    const cls = p.realized >= 0 ? 'pos' : 'neg';
+    rows.push(`<div><div class="k">本次实现盈亏</div>
+      <div class="v ${cls}">${p.realized >= 0 ? '+' : ''}${num(p.realized)}</div></div>`);
+  }
+  rows.push(`<div><div class="k">交易日</div><div class="v">${esc(p.date)}</div></div>`);
+
+  const mergeNote = isBuy && before
+    ? `<p class="hint" style="margin:0">合并进已有持仓「${esc(p.name)}」：份额 ${num(before.units)} → ${num(after.units)}，
+       成本价按加权平均重算为 ${num(after.cost_price)}。</p>`
+    : `<p class="hint" style="margin:0">${isBuy ? '新建' : '卖出'}「${esc(p.name)}」${esc(p.code || '')}。</p>`;
+
+  const warn = p.warning
+    ? `<p class="hint neg" style="margin:0">${esc(p.warning)}</p>`
+    : '';
+
+  openModal(isBuy ? '确认买入' : '确认卖出', `
+    <div class="trade-preview">
+      <div class="tp-head">
+        <b>${esc(p.name)}</b>
+        ${p.code ? `<span class="tag">${esc(p.code)}</span>` : ''}
+        <span class="tag ${isBuy ? '' : 'tiny-tag'}">${isBuy ? '买入' : '卖出'}</span>
+      </div>
+      <div class="tp-grid">${rows.join('')}</div>
+      ${mergeNote}
+      ${warn}
+      <p class="hint" style="margin:0">原话：<code>${esc(text)}</code></p>
+      <div class="tp-actions">
+        <button class="btn ghost" id="tp-cancel" type="button">取消</button>
+        <button class="btn primary" id="tp-ok" type="button">确认${isBuy ? '买入' : '卖出'}</button>
+      </div>
+    </div>
+  `, () => {
+    $('#tp-cancel').addEventListener('click', closeModal);
+    $('#tp-ok').addEventListener('click', async () => {
+      const btn = $('#tp-ok');
+      btn.disabled = true;
+      btn.textContent = '处理中…';
+      try {
+        const r = await api('/api/holdings/trade', {
+          method: 'POST', body: { text },
+        });
+        closeModal();
+        const msg = r.side === 'buy'
+          ? (r.is_new ? `已买入 ${r.name}` : `已合并 ${r.name}：${r.after.units} 份，成本价 ${r.after.cost_price}`)
+          : `已卖出 ${r.name} ${r.units} 份`;
+        toast(msg);
+        $('#trade-input').value = '';
+        const hint = $('#trade-hint');
+        hint.className = 'hint';
+        hint.textContent = '';
+        await loadInvestmentPage();
+        await loadTrades();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '确认';
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+async function submitTrade() {
+  const input = $('#trade-input');
+  const text = input.value.trim();
+  if (!text) return toast('先写一句，比如：000001 买入 100 股 成本价 100', true);
+  const btn = $('#trade-go');
+  btn.disabled = true;
+  btn.textContent = '解析中…';
+  try {
+    await previewTrade(text);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '录入';
+  }
+}
+
+// 最近交易流水
+async function loadTrades() {
+  try {
+    const data = await api('/api/holdings/trades?limit=20');
+    const items = data.items || [];
+    $('#trade-list').innerHTML = items.length ? items.map((t) => {
+      const buy = t.side === 'buy';
+      const cls = t.realized > 0 ? 'pos' : t.realized < 0 ? 'neg' : '';
+      const tail = buy
+        ? `买 ${t.units} @ ${t.price}`
+        : `卖 ${t.units} @ ${t.price}`;
+      const extra = (!buy && t.realized)
+        ? ` <span class="${cls}">${t.realized >= 0 ? '+' : ''}${Number(t.realized).toFixed(2)}</span>`
+        : '';
+      return `<div class="mini-row">
+        <span class="d">${esc(t.date.slice(5))}</span>
+        <span class="n">${buy ? '买' : '卖'} ${esc(t.name)}${t.code ? ' ' + esc(t.code) : ''}</span>
+        <span class="a">${tail}${extra}</span>
+      </div>`;
+    }).join('') : '<div class="empty">还没有交易记录。</div>';
+  } catch (err) { /* 忽略 */ }
 }
 
 /* ---------------- 自动同步 ---------------- */
@@ -1436,6 +1583,10 @@ function bind() {
 
   // 持仓
   $('#holding-add').addEventListener('click', openHoldingForm);
+  $('#trade-go').addEventListener('click', submitTrade);
+  $('#trade-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitTrade(); }
+  });
 
   // 预算
   $('#budget-add').addEventListener('click', openBudgetForm);

@@ -13,8 +13,9 @@ import quotes
 import scheduler as sched
 import security
 import services as svc
+import trade_service
 from models import (AiSettingsIn, AnalyzeIn, AutoSyncIn, BudgetIn, HoldingIn,
-                    HoldingPatch, JevSettingsIn, PriceIn)
+                    HoldingPatch, JevSettingsIn, PriceIn, TradeIn)
 
 router = APIRouter(prefix="/api", tags=["assets"], dependencies=[Depends(security.require_auth)])
 
@@ -131,6 +132,29 @@ def delete_holding(holding_id: int):
     db.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
     db.snapshot_portfolio()
     return None
+
+
+# ---------- 快捷交易（一句话买卖） ----------
+
+@router.post("/holdings/trade/preview")
+def trade_preview(payload: TradeIn):
+    """预演一笔交易：不写库，只说清会发生什么。"""
+    return trade_service.preview(payload.text)
+
+
+@router.post("/holdings/trade")
+def trade_apply(payload: TradeIn):
+    """执行一笔交易：合并进持仓并记一笔流水。"""
+    try:
+        return trade_service.apply(payload.text)
+    except trade_service.TradeError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+
+
+@router.get("/holdings/trades")
+def trade_list(limit: int = 50):
+    """最近的交易流水。"""
+    return {"items": trade_service.recent_trades(limit)}
 
 
 # ---------- 行情与汇率 ----------

@@ -394,6 +394,27 @@ code { font: 12px/1.4 var(--mono); background: var(--accent-soft); padding: 1px 
 .mini-row .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-row .a { font-family: var(--serif); font-variant-numeric: tabular-nums; }
 
+/* ---------- 快捷交易输入条 ---------- */
+.trade-bar {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 8px;
+}
+.trade-bar .grow { flex: 1 1 auto; min-width: 0; }
+.trade-bar .input { font-family: var(--mono); font-size: 13px; }
+.trade-bar .input::placeholder { font-family: var(--sans); color: var(--muted); }
+#trade-hint { margin: 0 0 14px; }
+
+/* 交易预览卡 */
+.trade-preview { display: flex; flex-direction: column; gap: 10px; }
+.trade-preview .tp-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.trade-preview .tp-head b { font-size: 16px; font-family: var(--serif); }
+.tp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.tp-grid .k { color: var(--muted); font-size: 11px; }
+.tp-grid .v { font-variant-numeric: tabular-nums; }
+.tp-arrow { color: var(--muted); margin: 0 4px; }
+.tp-actions { display: flex; gap: 8px; }
+.tp-actions .btn { flex: 1; }
+
 /* ---------- 预算 ---------- */
 
 .budget-list { display: flex; flex-direction: column; gap: 12px; }

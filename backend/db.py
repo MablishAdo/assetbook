@@ -82,6 +82,24 @@ CREATE TABLE IF NOT EXISTS holdings (
 );
 CREATE INDEX IF NOT EXISTS idx_hold_code ON holdings (code);
 
+-- 交易流水：每次买入/卖出记一条，用于算已实现盈亏、回看操作
+CREATE TABLE IF NOT EXISTS holding_trades (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  date       TEXT    NOT NULL,                   -- 交易日
+  holding_id INTEGER,                           -- 清仓后持仓已删，这里留空
+  code       TEXT,
+  name       TEXT    NOT NULL,
+  side       TEXT    NOT NULL,                   -- buy / sell
+  units      REAL    NOT NULL,                   -- 正数
+  price      REAL    NOT NULL,                   -- 成交价
+  amount     REAL    NOT NULL DEFAULT 0,        -- 成交金额
+  realized   REAL    NOT NULL DEFAULT 0,        -- 卖出实现的盈亏
+  note       TEXT,
+  created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trade_holding ON holding_trades (holding_id);
+CREATE INDEX IF NOT EXISTS idx_trade_date ON holding_trades (date);
+
 CREATE TABLE IF NOT EXISTS budgets (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   month       TEXT    NOT NULL,                    -- 'YYYY-MM'，'*' 表示每月通用
@@ -169,7 +187,7 @@ def set_meta(key: str, value: str) -> None:
     )
 
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:

@@ -203,29 +203,45 @@
 
       <div class="cols">
         <div class="col-main">
-          <div class="panel">
-            <div class="panel-head">
-              <h2><i>02</i>持仓明细</h2>
-              <button class="btn primary" id="holding-add" type="button">新增持仓</button>
-            </div>
-            <div class="table-wrap">
-              <table class="table responsive" id="holding-table">
-                <thead>
-                  <tr>
-                    <th>名称</th><th>类型</th><th class="num">份额</th><th class="num">成本价</th>
-                    <th class="num">现价</th><th class="num">市值</th><th class="num">占比</th>
-                    <th class="num">盈亏</th><th></th>
-                  </tr>
-                </thead>
-                <tbody id="holding-body"></tbody>
-              </table>
-            </div>
-            <p class="hint">填了代码的持仓会自动从行情接口更新现价（沪深 / 场内基金 / 港股 / 场外基金 / 加密货币），也能在表格里手改。</p>
-          </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2><i>02</i>持仓明细</h2>
+          <button class="btn primary" id="holding-add" type="button">手动新增</button>
         </div>
+        <div class="trade-bar">
+          <input class="input grow" id="trade-input" autocomplete="off"
+                 placeholder="一句话记账：000001 买入 100 股 成本价 100">
+          <button class="btn" id="trade-go" type="button">录入</button>
+        </div>
+        <p class="hint" id="trade-hint">
+          直接敲「代码 买入/卖出 份额 成本价」，回车即可。已有持仓会自动合并并重算成本价。
+          也认「600519 买 100股 @1200」「510300 买入 1000 元」「000001 清仓」。
+        </p>
+        <div class="table-wrap">
+          <table class="table responsive" id="holding-table">
+            <thead>
+              <tr>
+                <th>名称</th><th>类型</th><th class="num">份额</th><th class="num">成本价</th>
+                <th class="num">现价</th><th class="num">市值</th><th class="num">占比</th>
+                <th class="num">盈亏</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="holding-body"></tbody>
+          </table>
+        </div>
+        <p class="hint">填了代码的持仓会自动从行情接口更新现价（沪深 / 场内基金 / 港股 / 场外基金 / 加密货币），也能在表格里手改。</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2><i>03</i>最近交易</h2>
+        </div>
+        <div class="mini-list" id="trade-list"></div>
+      </div>
+    </div>
         <div class="col-side">
           <div class="panel">
-            <h2><i>03</i>品种分布</h2>
+            <h2><i>04</i>品种分布</h2>
             <div class="donut-row">
               <svg id="holding-donut" viewBox="0 0 200 200"></svg>
               <div class="legend" id="holding-legend"></div>
@@ -234,7 +250,7 @@
 
           <div class="panel">
             <div class="panel-head">
-              <h2><i>04</i>市值走势</h2>
+              <h2><i>05</i>市值走势</h2>
               <div class="seg" id="pf-range">
                 <button class="seg-btn is-on" data-range="30">30 天</button>
                 <button class="seg-btn" data-range="12">12 个月</button>
